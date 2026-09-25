@@ -1,4 +1,4 @@
-name: SADEE X DIMA REAL BUILD
+name: SADEE X DIMA - V3 BUILD & ADMIN
 
 on:
   push:
@@ -9,155 +9,372 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: sadee-x-dima-v3
+  cancel-in-progress: true
+
 jobs:
-  build:
-    name: Build APK and Admin
+
+  # =========================================================
+  # ANDROID APK BUILD
+  # =========================================================
+
+  build-apk:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Find ZIP
+      - name: Find V3 ZIP
         id: zip
+        shell: bash
         run: |
           set -e
 
-          ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+          echo "======================================"
+          echo "SEARCHING FOR V3 ZIP"
+          echo "======================================"
 
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: ZIP file not found in repository root."
+          ZIP_FILE=$(find . \
+            -maxdepth 1 \
+            -type f \
+            -iname "*.zip" \
+            | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: ZIP file not found."
             ls -la
             exit 1
           fi
 
-          echo "Found: $ZIP"
-          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "ZIP FOUND:"
+          echo "$ZIP_FILE"
+
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Extract ZIP
+        shell: bash
         run: |
           set -e
 
           rm -rf extracted
-          mkdir extracted
+          mkdir -p extracted
 
-          unzip -o "${{ steps.zip.outputs.zip }}" -d extracted
+          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
 
-          echo "Extracted files:"
-          find extracted -maxdepth 6 -type f | sort
+          echo ""
+          echo "======================================"
+          echo "EXTRACTED PROJECT"
+          echo "======================================"
+
+          find extracted -maxdepth 4 -type f | sort
 
       - name: Find Android Project
         id: android
+        shell: bash
         run: |
           set -e
 
           PROJECT=$(find extracted \
             -type f \
             -name "settings.gradle" \
-            -printf '%h\n' | head -n 1)
+            -printf '%h\n' \
+            | head -n 1)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: Android project not found."
+            echo "ERROR: settings.gradle not found."
+            find extracted -maxdepth 6 -type f | sort
             exit 1
           fi
 
-          echo "Android project: $PROJECT"
+          echo "ANDROID PROJECT:"
+          echo "$PROJECT"
+
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.0
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.0"
 
+      - name: Verify Java & Gradle
+        run: |
+          echo "JAVA:"
+          java -version
+
+          echo ""
+          echo "GRADLE:"
+          gradle --version
+
+      # -------------------------------------------------------
+      # ANDROIDX
+      # -------------------------------------------------------
+
       - name: Enable AndroidX
         working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
         run: |
+          set -e
+
           touch gradle.properties
 
-          sed -i '/android.useAndroidX/d' gradle.properties || true
-          sed -i '/android.enableJetifier/d' gradle.properties || true
+          sed -i '/^android\.useAndroidX=/d' gradle.properties || true
+          sed -i '/^android\.enableJetifier=/d' gradle.properties || true
 
           echo "android.useAndroidX=true" >> gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
 
-      - name: Fix Repository Mode
+          echo ""
+          echo "GRADLE.PROPERTIES:"
+          cat gradle.properties
+
+      # -------------------------------------------------------
+      # FIX REPOSITORY MODE
+      # -------------------------------------------------------
+
+      - name: Fix Gradle Repository Mode
         working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
         run: |
+          set -e
+
           if [ -f settings.gradle ]; then
+
             sed -i \
               's/RepositoriesMode.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle || true
 
-            sed -i \
-              's/RepositoriesMode.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
-              settings.gradle || true
           fi
 
-      - name: Build APK
+          echo ""
+          echo "SETTINGS.GRADLE:"
+          cat settings.gradle
+
+      # -------------------------------------------------------
+      # XML VALIDATION
+      # -------------------------------------------------------
+
+      - name: Validate XML Resources
         working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
         run: |
           set -e
 
-          gradle clean assembleDebug \
+          echo "======================================"
+          echo "VALIDATING XML"
+          echo "======================================"
+
+          python3 - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+
+          files = glob.glob("app/src/main/res/**/*.xml", recursive=True)
+
+          failed = False
+
+          for file in files:
+              try:
+                  ET.parse(file)
+                  print("OK:", file)
+              except Exception as e:
+                  print("ERROR:", file)
+                  print(e)
+                  failed = True
+
+          if failed:
+              raise SystemExit(1)
+          PY
+
+          echo "XML VALIDATION COMPLETE"
+
+      # -------------------------------------------------------
+      # INSPECT PROJECT
+      # -------------------------------------------------------
+
+      - name: Inspect Android Project
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: |
+          echo "======================================"
+          echo "ROOT BUILD.GRADLE"
+          echo "======================================"
+
+          cat build.gradle || true
+
+          echo ""
+          echo "======================================"
+          echo "APP BUILD.GRADLE"
+          echo "======================================"
+
+          cat app/build.gradle || true
+
+          echo ""
+          echo "======================================"
+          echo "SETTINGS.GRADLE"
+          echo "======================================"
+
+          cat settings.gradle || true
+
+      # -------------------------------------------------------
+      # BUILD APK
+      # -------------------------------------------------------
+
+      - name: Build Debug APK
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: |
+
+          set +e
+
+          echo "======================================"
+          echo "BUILDING SADEE X DIMA APK"
+          echo "======================================"
+
+          gradle \
+            clean \
+            assembleDebug \
             --no-daemon \
-            --stacktrace
+            --stacktrace \
+            --info \
+            2>&1 | tee build.log
 
-      - name: Find APK
-        id: apk
+          RESULT=${PIPESTATUS[0]}
+
+          echo ""
+          echo "======================================"
+          echo "BUILD ERROR SUMMARY"
+          echo "======================================"
+
+          grep -E \
+            "FAILURE:|error:|Error:|Caused by:|Execution failed|Could not|AAPT|Manifest|resource|XMLStreamException|SAXParseException" \
+            build.log \
+            | tail -200 || true
+
+          echo ""
+          echo "GRADLE EXIT CODE:"
+          echo "$RESULT"
+
+          exit "$RESULT"
+
+      # -------------------------------------------------------
+      # UPLOAD LOG
+      # -------------------------------------------------------
+
+      - name: Upload Gradle Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sadee-x-dima-gradle-log
+          path: |
+            ${{ steps.android.outputs.project }}/build.log
+          if-no-files-found: ignore
+
+      # -------------------------------------------------------
+      # UPLOAD APK
+      # -------------------------------------------------------
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SADEE-X-DIMA-V3-APK
+          path: |
+            ${{ steps.android.outputs.project }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+
+  # =========================================================
+  # ADMIN DASHBOARD
+  # =========================================================
+
+  deploy-admin:
+    name: Deploy Advanced Admin Panel
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Find V3 ZIP
+        id: zip
+        shell: bash
         run: |
           set -e
 
-          APK=$(find \
-            "${{ steps.android.outputs.project }}/app/build/outputs/apk" \
+          ZIP_FILE=$(find . \
+            -maxdepth 1 \
             -type f \
-            -name "*.apk" | head -n 1)
+            -iname "*.zip" \
+            | head -n 1)
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: ZIP file not found."
             exit 1
           fi
 
-          echo "APK: $APK"
-          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+          echo "ZIP:"
+          echo "$ZIP_FILE"
+
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf extracted
+          mkdir -p extracted
+
+          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
 
       - name: Find Admin Dashboard
         id: admin
+        shell: bash
         run: |
           set -e
 
           ADMIN=$(find extracted \
             -type d \
-            -name "admin-dashboard" | head -n 1)
+            -name "admin-dashboard" \
+            | head -n 1)
 
           if [ -z "$ADMIN" ]; then
-            INDEX=$(find extracted \
+            echo "ERROR: admin-dashboard folder not found."
+
+            find extracted \
+              -maxdepth 8 \
               -type f \
-              -name "index.html" | head -n 1)
+              | sort
 
-            if [ -z "$INDEX" ]; then
-              echo "ERROR: Admin dashboard not found."
-              exit 1
-            fi
-
-            ADMIN=$(dirname "$INDEX")
+            exit 1
           fi
 
-          echo "Admin: $ADMIN"
+          echo ""
+          echo "======================================"
+          echo "ADMIN DASHBOARD FOUND"
+          echo "======================================"
+
+          echo "$ADMIN"
+
           echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare Admin
+      - name: Prepare Admin Website
+        shell: bash
         run: |
           set -e
 
           rm -rf public
-          mkdir public
+          mkdir -p public
 
           cp -R \
             "${{ steps.admin.outputs.admin }}/." \
@@ -165,7 +382,17 @@ jobs:
 
           touch public/.nojekyll
 
-      - name: Deploy Admin
+          echo ""
+          echo "======================================"
+          echo "ADMIN WEBSITE FILES"
+          echo "======================================"
+
+          find public \
+            -maxdepth 5 \
+            -type f \
+            | sort
+
+      - name: Publish Admin Dashboard
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -173,47 +400,3 @@ jobs:
           publish_dir: ./public
           force_orphan: true
           enable_jekyll: false
-
-      - name: Create Final Package
-        run: |
-          set -e
-
-          rm -rf final
-          mkdir -p final/ADMIN_DASHBOARD
-
-          cp \
-            "${{ steps.apk.outputs.apk }}" \
-            final/SADEE_X_DIMA.apk
-
-          cp -R \
-            public/. \
-            final/ADMIN_DASHBOARD/
-
-          echo "SADEE X DIMA REAL RELEASE" > final/README.txt
-          echo "" >> final/README.txt
-          echo "SADEE_X_DIMA.apk = Android application" >> final/README.txt
-          echo "ADMIN_DASHBOARD = Web admin dashboard" >> final/README.txt
-
-          cd final
-
-          zip -r ../SADEE_X_DIMA_REAL_RELEASE.zip .
-
-          cd ..
-
-          echo "================================"
-          echo "FINAL ZIP"
-          echo "================================"
-
-          ls -lh SADEE_X_DIMA_REAL_RELEASE.zip
-
-          echo ""
-          echo "CONTENTS:"
-          unzip -l SADEE_X_DIMA_REAL_RELEASE.zip
-
-      - name: Upload Final Release
-        uses: actions/upload-artifact@v4
-        with:
-          name: SADEE-X-DIMA-REAL-RELEASE
-          path: SADEE_X_DIMA_REAL_RELEASE.zip
-          if-no-files-found: error
-          retention-days: 30
