@@ -1,20 +1,27 @@
-name: SADEE X DIMA V5 BUILD
+name: SADEE X DIMA V6 - BUILD APK + ADMIN
 
 on:
   push:
     branches:
       - main
+    paths:
+      - "**.zip"
+      - "**.dart"
+      - ".github/workflows/**"
+
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: sadee-x-dima-v5
+  group: sadee-x-dima-v6
   cancel-in-progress: true
 
 jobs:
+
   build-apk-and-admin:
+
     name: Build APK and Admin
     runs-on: ubuntu-latest
 
@@ -23,550 +30,753 @@ jobs:
       # =========================================================
       # 1. CHECKOUT
       # =========================================================
+
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+
       # =========================================================
-      # 2. FIND ZIP UPLOADED TO GITHUB
+      # 2. SETUP FLUTTER
       # =========================================================
-      - name: Find Project ZIP
-        id: zip
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+
+      # =========================================================
+      # 3. FIND ZIP + EXTRACT
+      # =========================================================
+
+      - name: Find and Extract Flutter Project
+        id: project
         shell: bash
         run: |
-          set -e
 
-          echo "Searching for project ZIP..."
+          set -euo pipefail
 
-          ZIP_FILE="$(find . \
-            -type f \
-            -iname '*.zip' \
-            -not -path './.git/*' \
-            -not -path './extracted/*' \
-            | head -n 1)"
+          ROOT="$GITHUB_WORKSPACE"
+          EXTRACT="$ROOT/extracted_project"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::No ZIP file found in repository."
+          rm -rf "$EXTRACT"
+          mkdir -p "$EXTRACT"
+
+          echo "=========================================="
+          echo "SEARCHING FOR SADEE X DIMA PROJECT"
+          echo "=========================================="
+
+          # If repository itself is Flutter project
+          if [ -f "$ROOT/pubspec.yaml" ]; then
+
+            PROJECT_DIR="$ROOT"
+
+            echo "Flutter project found directly in repository."
+
+          else
+
+            ZIP_FILE="$(
+              find "$ROOT" \
+                -type f \
+                -iname "*.zip" \
+                ! -path "*/.git/*" \
+                ! -path "*/extracted_project/*" \
+                -print \
+                | head -n 1
+            )"
+
+            if [ -z "$ZIP_FILE" ]; then
+
+              echo "::error::No Flutter ZIP found."
+              echo ""
+              echo "Repository files:"
+              find "$ROOT" \
+                -maxdepth 4 \
+                -type f \
+                ! -path "*/.git/*" \
+                | sort \
+                | head -300
+
+              exit 1
+
+            fi
+
+            echo "ZIP FOUND:"
+            echo "$ZIP_FILE"
+
+            unzip -q -o "$ZIP_FILE" -d "$EXTRACT"
+
+            PUBSPEC="$(
+              find "$EXTRACT" \
+                -type f \
+                -name "pubspec.yaml" \
+                ! -path "*/.git/*" \
+                -print \
+                | head -n 1
+            )"
+
+            if [ -z "$PUBSPEC" ]; then
+
+              echo "::error::pubspec.yaml not found inside ZIP."
+
+              unzip -l "$ZIP_FILE" | head -300
+
+              exit 1
+
+            fi
+
+            PROJECT_DIR="$(dirname "$PUBSPEC")"
+
+          fi
+
+          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+
+          echo "=========================================="
+          echo "PROJECT:"
+          echo "$PROJECT_DIR"
+          echo "=========================================="
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+
+      # =========================================================
+      # 4. VERIFY PROJECT
+      # =========================================================
+
+      - name: Verify Flutter Project
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          test -f pubspec.yaml
+
+          if [ ! -f lib/main_user.dart ]; then
+            echo "::error::lib/main_user.dart not found."
             exit 1
           fi
 
-          echo "ZIP FOUND:"
-          echo "$ZIP_FILE"
+          if [ ! -f lib/main_admin.dart ]; then
+            echo "::error::lib/main_admin.dart not found."
+            exit 1
+          fi
 
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+          if [ ! -d android ]; then
+            echo "::error::Android folder not found."
+            exit 1
+          fi
 
-      # =========================================================
-      # 3. EXTRACT ZIP
-      # =========================================================
-      - name: Extract Project ZIP
-        shell: bash
-        run: |
-          set -e
-
-          rm -rf extracted
-          mkdir -p extracted
-
-          unzip -o \
-            "${{ steps.zip.outputs.zip_file }}" \
-            -d extracted
+          echo "Flutter project verified."
 
           echo ""
-          echo "===== EXTRACTED FILES ====="
+          echo "PROJECT FILES:"
+          find lib -maxdepth 3 -type f | sort | head -300
 
-          find extracted \
-            -maxdepth 6 \
-            -type f \
-            | head -500
 
       # =========================================================
-      # 4. FIND ANDROID PROJECT
+      # 5. APPLY V6 USER HOME
       # =========================================================
-      - name: Find Android Project
-        id: android
+
+      - name: Install V6 User Home
         shell: bash
         run: |
-          set -e
 
-          echo "Searching for Android project..."
+          set -euo pipefail
 
-          SETTINGS_FILE="$(
-            find extracted \
+          cd "$GITHUB_WORKSPACE"
+
+          V6_FILE="$(
+            find "$GITHUB_WORKSPACE" \
               -type f \
               \( \
-                -name 'settings.gradle' \
+                -name "SADEE_X_DIMA_USER_HOME_V6.dart" \
                 -o \
-                -name 'settings.gradle.kts' \
+                -name "user_home_fixed.dart" \
               \) \
+              ! -path "*/.git/*" \
+              ! -path "*/extracted_project/*" \
+              -print \
               | head -n 1
           )"
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "::error::settings.gradle not found."
-            exit 1
+          if [ -z "$V6_FILE" ]; then
+
+            echo "V6 Dart file not found."
+            echo "Using source already contained in ZIP."
+
+          else
+
+            echo "V6 SOURCE FOUND:"
+            echo "$V6_FILE"
+
+            cd "$PROJECT_DIR"
+
+            mkdir -p lib/screens
+
+            # Prefer user_home.dart if it exists
+            if [ -f lib/screens/user_home.dart ]; then
+
+              cp "$V6_FILE" lib/screens/user_home.dart
+
+              echo "Installed V6 -> lib/screens/user_home.dart"
+
+            elif [ -f lib/screens/user_home_fixed.dart ]; then
+
+              cp "$V6_FILE" lib/screens/user_home_fixed.dart
+
+              echo "Installed V6 -> lib/screens/user_home_fixed.dart"
+
+            else
+
+              cp "$V6_FILE" lib/screens/user_home.dart
+
+              echo "Created lib/screens/user_home.dart"
+
+            fi
+
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
-          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
-
-          echo "Android project:"
-          echo "$PROJECT_DIR"
-
-          if [ ! -d "$PROJECT_DIR/app" ]; then
-            echo "::error::app directory not found."
-            exit 1
-          fi
-
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       # =========================================================
-      # 5. JAVA 17
+      # 6. FLUTTER DEPENDENCIES
       # =========================================================
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
 
-      # =========================================================
-      # 6. GRADLE 8.7
-      # =========================================================
-      - name: Setup Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
-
-      # =========================================================
-      # 7. ANDROIDX
-      # =========================================================
-      - name: Configure AndroidX
+      - name: Flutter Clean
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
+
           set -e
 
-          PROJECT="${{ steps.android.outputs.project_dir }}"
+          flutter clean
 
-          cat > "$PROJECT/gradle.properties" <<'EOF'
-          android.useAndroidX=true
-          android.enableJetifier=true
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          EOF
 
-          echo "AndroidX configured."
-
-      # =========================================================
-      # 8. FORCE GRADLE WRAPPER 8.7
-      # =========================================================
-      - name: Force Gradle Wrapper 8.7
+      - name: Flutter Pub Get
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
+
           set -e
 
-          PROJECT="${{ steps.android.outputs.project_dir }}"
-          WRAPPER="$PROJECT/gradle/wrapper/gradle-wrapper.properties"
+          flutter pub get
 
-          if [ -f "$WRAPPER" ]; then
 
-            echo "Before:"
-            cat "$WRAPPER"
+      # =========================================================
+      # 7. SAFE DART REPAIR
+      # =========================================================
 
-            python3 - "$WRAPPER" <<'PY'
-          import sys
-          import re
+      - name: Repair Dart Source
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
 
-          path = sys.argv[1]
+          set -euo pipefail
 
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
+          python3 <<'PY'
 
-          text = re.sub(
-              r'gradle-[0-9.]+-(bin|all)\.zip',
-              r'gradle-8.7-\1.zip',
-              text
-          )
+          from pathlib import Path
 
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
+          files = list(Path("lib").rglob("*.dart"))
+
+          print("Checking Dart files:", len(files))
+
+          for p in files:
+
+              text = p.read_text(
+                  encoding="utf-8",
+                  errors="ignore"
+              )
+
+              # Common syntax repair
+              text = text.replace(
+                  "c=='temp'?.5:1",
+                  "c == 'temp' ? .5 : 1"
+              )
+
+              text = text.replace(
+                  "c == 'temp'?.5:1",
+                  "c == 'temp' ? .5 : 1"
+              )
+
+              text = text.replace(
+                  "c == 'temp' ? .5 :1",
+                  "c == 'temp' ? .5 : 1"
+              )
+
+              text = text.replace(
+                  "Border.all((x['c'] as Color).withOpacity(.25))",
+                  "Border.all(color: (x['c'] as Color).withOpacity(.25))"
+              )
+
+              p.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
+          print("Dart repair complete.")
+
           PY
 
-            echo ""
-            echo "After:"
-            cat "$WRAPPER"
-
-          fi
 
       # =========================================================
-      # 9. GRADLE WRAPPER PERMISSION
+      # 8. ANDROID TOOLCHAIN
       # =========================================================
-      - name: Prepare Gradle Wrapper
+
+      - name: Stabilize Android Toolchain
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
 
-          PROJECT="${{ steps.android.outputs.project_dir }}"
+          set -euo pipefail
 
-          if [ -f "$PROJECT/gradlew" ]; then
-            chmod +x "$PROJECT/gradlew"
+          # Gradle 8.14.5
+          if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
+
+            sed -i -E \
+              's#gradle-[0-9.]+-(all|bin)\.zip#gradle-8.14.5-\1.zip#g' \
+              android/gradle/wrapper/gradle-wrapper.properties
+
           fi
 
+
+          # AGP
+          if [ -f android/settings.gradle ]; then
+
+            sed -i -E \
+              's/com\.android\.application:[0-9.]+/com.android.application:8.11.1/g' \
+              android/settings.gradle || true
+
+            sed -i -E \
+              's/org\.jetbrains\.kotlin\.android:[0-9.]+/org.jetbrains.kotlin.android:2.2.20/g' \
+              android/settings.gradle || true
+
+            sed -i -E \
+              's/(id[[:space:]]+["'\'']com\.android\.application["'\''][[:space:]]+version[[:space:]]+["'\''])[^"'\'']+(["'\''])/\18.11.1\2/g' \
+              android/settings.gradle || true
+
+            sed -i -E \
+              's/(id[[:space:]]+["'\'']org\.jetbrains\.kotlin\.android["'\''][[:space:]]+version[[:space:]]+["'\''])[^"'\'']+(["'\''])/\12.2.20\2/g' \
+              android/settings.gradle || true
+
+          fi
+
+
+          if [ -f android/settings.gradle.kts ]; then
+
+            sed -i -E \
+              's/com\.android\.application:[0-9.]+/com.android.application:8.11.1/g' \
+              android/settings.gradle.kts || true
+
+            sed -i -E \
+              's/org\.jetbrains\.kotlin\.android:[0-9.]+/org.jetbrains.kotlin.android:2.2.20/g' \
+              android/settings.gradle.kts || true
+
+          fi
+
+
       # =========================================================
-      # 10. FIX ANDROID XML
+      # 9. ANDROIDX
       # =========================================================
-      - name: Fix Android XML Resources
+
+      - name: Configure AndroidX
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
+
           set -e
 
-          PROJECT="${{ steps.android.outputs.project_dir }}"
-          RES="$PROJECT/app/src/main/res"
-
-          if [ ! -d "$RES" ]; then
-            echo "::error::res directory not found."
-            exit 1
+          if [ ! -f android/gradle.properties ]; then
+            touch android/gradle.properties
           fi
 
-          echo "Fixing hintTextColor..."
+          grep -q "^android.useAndroidX=true" \
+            android/gradle.properties \
+            || echo "android.useAndroidX=true" >> android/gradle.properties
 
-          find "$RES" \
-            -type f \
-            -name '*.xml' \
-            -exec sed -i \
-            's/android:hintTextColor=/android:textColorHint=/g' {} \;
+          grep -q "^android.enableJetifier=true" \
+            android/gradle.properties \
+            || echo "android.enableJetifier=true" >> android/gradle.properties
 
-          echo "Checking nav_colors.xml..."
+          grep -q "^org.gradle.jvmargs=" \
+            android/gradle.properties \
+            || echo "org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8" >> android/gradle.properties
 
-          if [ -f "$RES/values/nav_colors.xml" ]; then
-
-            mkdir -p "$RES/color"
-
-            mv \
-              "$RES/values/nav_colors.xml" \
-              "$RES/color/nav_colors.xml"
-
-            echo "nav_colors.xml moved to res/color."
-
-          fi
 
       # =========================================================
-      # 11. FIX JAVA SOURCE
+      # 10. FIX URI IMPORT
       # =========================================================
-      - name: Fix Java Source Compatibility
+
+      - name: Fix Android Uri Import
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
+
           set -e
 
-          PROJECT="${{ steps.android.outputs.project_dir }}"
-          JAVA_DIR="$PROJECT/app/src/main/java"
+          MAIN="$(
+            find android/app/src/main \
+              -type f \
+              \( -name "MainActivity.kt" -o -name "MainActivity.java" \) \
+              -print \
+              | head -n 1
+          )"
 
-          if [ ! -d "$JAVA_DIR" ]; then
-            echo "No Java directory."
-            exit 0
-          fi
+          if [ -n "$MAIN" ]; then
 
-          # -----------------------------------------------------
-          # Bundle import
-          # -----------------------------------------------------
-          while IFS= read -r FILE; do
+            if grep -q "Uri" "$MAIN"; then
 
-            if grep -q "class Page5InjectorFragment" "$FILE"; then
+              if [[ "$MAIN" == *.kt ]]; then
 
-              if ! grep -q "import android.os.Bundle;" "$FILE"; then
+                grep -q "import android.net.Uri" "$MAIN" \
+                  || sed -i '1i import android.net.Uri' "$MAIN"
 
-                sed -i \
-                  '/^package /a import android.os.Bundle;' \
-                  "$FILE"
+              elif [[ "$MAIN" == *.java ]]; then
+
+                grep -q "import android.net.Uri;" "$MAIN" \
+                  || sed -i '/^package /a import android.net.Uri;' "$MAIN"
 
               fi
 
             fi
 
-          done < <(
-            find "$JAVA_DIR" \
-              -type f \
-              -name '*.java'
-          )
-
-          # -----------------------------------------------------
-          # javax.xml.bind compatibility
-          # -----------------------------------------------------
-          while IFS= read -r FILE; do
-
-            if grep -q "javax.xml.bind.DatatypeConverter" "$FILE"; then
-
-              python3 - "$FILE" <<'PY'
-          import sys
-          import re
-
-          path = sys.argv[1]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          pattern = (
-              r'javax\.xml\.bind\.DatatypeConverter'
-              r'\.parseDateTime\(([^)]*)\)'
-              r'\.getTimeInMillis\(\)'
-          )
-
-          def replacement(match):
-              value = match.group(1)
-
-              return (
-                  "java.time.OffsetDateTime.parse("
-                  + value +
-                  ").toInstant().toEpochMilli()"
-              )
-
-          text = re.sub(
-              pattern,
-              replacement,
-              text
-          )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-          PY
-
-            fi
-
-          done < <(
-            find "$JAVA_DIR" \
-              -type f \
-              -name '*.java'
-          )
-
-      # =========================================================
-      # 12. VERIFY CONFIG
-      # =========================================================
-      - name: Verify Project
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT="${{ steps.android.outputs.project_dir }}"
-
-          echo "========================================"
-          echo "ANDROID PROJECT"
-          echo "========================================"
-
-          echo "$PROJECT"
-
-          echo ""
-          echo "========================================"
-          echo "JAVA"
-          echo "========================================"
-
-          java -version
-
-          echo ""
-          echo "========================================"
-          echo "GRADLE"
-          echo "========================================"
-
-          gradle --version
-
-          echo ""
-          echo "========================================"
-          echo "APP BUILD FILE"
-          echo "========================================"
-
-          if [ -f "$PROJECT/app/build.gradle" ]; then
-            cat "$PROJECT/app/build.gradle"
-          elif [ -f "$PROJECT/app/build.gradle.kts" ]; then
-            cat "$PROJECT/app/build.gradle.kts"
           fi
 
+
       # =========================================================
-      # 13. CLEAN
+      # 11. REPAIR LOGO
       # =========================================================
-      - name: Clean Project
+
+      - name: Repair Logo PNG
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
 
-          PROJECT="${{ steps.android.outputs.project_dir }}"
+          set -euo pipefail
 
-          cd "$PROJECT"
+          python3 -m pip install \
+            --quiet \
+            --disable-pip-version-check \
+            pillow
 
-          gradle clean --stacktrace
+          python3 <<'PY'
+
+          from pathlib import Path
+          from PIL import Image
+
+          root = Path(
+              "android/app/src/main/res"
+          )
+
+          for p in root.rglob("*.png"):
+
+              try:
+
+                  img = Image.open(p)
+                  img.load()
+
+                  if img.format != "PNG":
+                      continue
+
+                  print(
+                      "PNG OK:",
+                      p,
+                      img.size
+                  )
+
+              except Exception as e:
+
+                  print(
+                      "Skipping:",
+                      p,
+                      e
+                  )
+
+          PY
+
 
       # =========================================================
-      # 14. BUILD APK
+      # 12. DART FORMAT
       # =========================================================
-      - name: Build Debug APK
-        id: build
+
+      - name: Dart Format
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set +e
 
-          PROJECT="${{ steps.android.outputs.project_dir }}"
+          dart format lib
 
-          cd "$PROJECT"
-
-          echo "========================================"
-          echo "SADEE X DIMA V5 BUILD"
-          echo "========================================"
-
-          gradle assembleDebug \
-            --stacktrace \
-            --info \
-            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
-
-          STATUS=${PIPESTATUS[0]}
-
-          echo ""
-          echo "BUILD EXIT CODE: $STATUS"
-
-          exit "$STATUS"
 
       # =========================================================
-      # 15. FIND APK
+      # 13. ANALYZE
       # =========================================================
-      - name: Find APK
-        id: apk
-        if: success()
+
+      - name: Flutter Analyze
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
 
-          PROJECT="${{ steps.android.outputs.project_dir }}"
+          flutter analyze \
+            --no-fatal-infos \
+            --no-fatal-warnings
 
-          APK="$(
-            find "$PROJECT/app/build/outputs/apk" \
+
+      # =========================================================
+      # 14. BUILD USER APK
+      # =========================================================
+
+      - name: Build User APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --flavor user \
+            -t lib/main_user.dart \
+            --android-skip-build-dependency-validation
+
+
+      # =========================================================
+      # 15. BUILD ADMIN APK
+      # =========================================================
+
+      - name: Build Admin APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --flavor admin \
+            -t lib/main_admin.dart \
+            --android-skip-build-dependency-validation
+
+
+      # =========================================================
+      # 16. COLLECT APK
+      # =========================================================
+
+      - name: Prepare APK Files
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          mkdir -p release
+
+          USER_APK="$(
+            find build/app/outputs/flutter-apk \
               -type f \
-              -name '*.apk' \
+              -name "*user*release*.apk" \
               | head -n 1
           )"
 
-          if [ -z "$APK" ]; then
-            echo "::error::APK not found."
+          ADMIN_APK="$(
+            find build/app/outputs/flutter-apk \
+              -type f \
+              -name "*admin*release*.apk" \
+              | head -n 1
+          )"
+
+          if [ -z "$USER_APK" ]; then
+
+            echo "::error::User APK not found."
+
+            find build/app/outputs \
+              -type f \
+              -name "*.apk"
+
             exit 1
+
           fi
 
-          echo "APK FOUND:"
-          echo "$APK"
+          if [ -z "$ADMIN_APK" ]; then
 
-          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+            echo "::error::Admin APK not found."
+
+            find build/app/outputs \
+              -type f \
+              -name "*.apk"
+
+            exit 1
+
+          fi
+
+          cp "$USER_APK" \
+            release/SADEE-DIMA-OPTIMIZER-USER.apk
+
+          cp "$ADMIN_APK" \
+            release/SADEE-DIMA-OPTIMIZER-ADMIN.apk
+
+          ls -lh release
+
 
       # =========================================================
-      # 16. UPLOAD APK
+      # 17. UPLOAD APK ARTIFACT
       # =========================================================
-      - name: Upload APK
-        if: success()
+
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-V5-APK
-          path: ${{ steps.apk.outputs.apk_path }}
+          name: SADEE-DIMA-V6-APKS
+          path: |
+            ${{ env.PROJECT_DIR }}/release/SADEE-DIMA-OPTIMIZER-USER.apk
+            ${{ env.PROJECT_DIR }}/release/SADEE-DIMA-OPTIMIZER-ADMIN.apk
           if-no-files-found: error
           retention-days: 30
 
-      # =========================================================
-      # 17. UPLOAD BUILD LOG
-      # =========================================================
-      - name: Upload Build Log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SADEE-X-DIMA-V5-BUILD-LOG
-          path: build.log
-          if-no-files-found: warn
-          retention-days: 30
 
       # =========================================================
       # 18. FIND ADMIN DASHBOARD
       # =========================================================
+
       - name: Find Admin Dashboard
         id: admin
         shell: bash
         run: |
+
           set -e
 
-          ADMIN_DIR=""
+          ADMIN=""
 
-          if [ -d "extracted/admin-dashboard" ]; then
-            ADMIN_DIR="extracted/admin-dashboard"
+          # Preferred location
+          if [ -f "$PROJECT_DIR/admin-dashboard/index.html" ]; then
+
+            ADMIN="$PROJECT_DIR/admin-dashboard"
+
           fi
 
-          if [ -z "$ADMIN_DIR" ]; then
 
-            INDEX_FILE="$(
-              find extracted \
+          # Search if not found
+          if [ -z "$ADMIN" ]; then
+
+            INDEX="$(
+              find "$PROJECT_DIR" \
                 -type f \
-                -name 'index.html' \
+                -name "index.html" \
+                ! -path "*/node_modules/*" \
+                ! -path "*/build/*" \
+                -print \
                 | head -n 1
             )"
 
-            if [ -n "$INDEX_FILE" ]; then
-              ADMIN_DIR="$(dirname "$INDEX_FILE")"
+            if [ -n "$INDEX" ]; then
+              ADMIN="$(dirname "$INDEX")"
             fi
 
           fi
 
-          if [ -z "$ADMIN_DIR" ]; then
 
-            echo "No Admin Dashboard found."
+          if [ -z "$ADMIN" ]; then
 
-            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "Admin dashboard not found."
+            echo "admin_found=false" >> "$GITHUB_OUTPUT"
 
-            exit 0
+          else
+
+            echo "ADMIN:"
+            echo "$ADMIN"
+
+            echo "admin_found=true" >> "$GITHUB_OUTPUT"
+            echo "admin_dir=$ADMIN" >> "$GITHUB_OUTPUT"
+
           fi
 
-          echo "ADMIN:"
-          echo "$ADMIN_DIR"
-
-          echo "found=true" >> "$GITHUB_OUTPUT"
-          echo "path=$ADMIN_DIR" >> "$GITHUB_OUTPUT"
 
       # =========================================================
-      # 19. PREPARE ADMIN
+      # 19. PREPARE GITHUB PAGES
       # =========================================================
-      - name: Prepare Admin Dashboard
-        if: success() && steps.admin.outputs.found == 'true'
+
+      - name: Prepare Admin Pages
+        if: steps.admin.outputs.admin_found == 'true'
         shell: bash
         run: |
+
           set -e
 
           rm -rf public
+
           mkdir -p public
 
           cp -R \
-            "${{ steps.admin.outputs.path }}/." \
+            "${{ steps.admin.outputs.admin_dir }}/." \
             public/
 
-          echo "===== ADMIN FILES ====="
+          touch public/.nojekyll
+
+          echo "=========================================="
+          echo "ADMIN DASHBOARD FILES"
+          echo "=========================================="
 
           find public \
             -maxdepth 5 \
             -type f \
             | sort
 
+
       # =========================================================
       # 20. DEPLOY ADMIN
       # =========================================================
+
       - name: Deploy Admin Dashboard
-        if: success() && steps.admin.outputs.found == 'true'
+        if: steps.admin.outputs.admin_found == 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
           publish_dir: ./public
           force_orphan: true
-          commit_message: "Deploy SADEE X DIMA V5 Admin"
+          enable_jekyll: false
+          commit_message: "Deploy SADEE X DIMA V6 Admin Dashboard"
+
 
       # =========================================================
-      # 21. SUCCESS
+      # 21. BUILD LOG
       # =========================================================
+
+      - name: Upload Flutter Build Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SADEE-DIMA-V6-BUILD-LOGS
+          path: |
+            ${{ env.PROJECT_DIR }}/build
+            ${{ env.PROJECT_DIR }}/.dart_tool
+          if-no-files-found: ignore
+          retention-days: 7
+
+
+      # =========================================================
+      # 22. COMPLETE
+      # =========================================================
+
       - name: Build Complete
         if: success()
         shell: bash
         run: |
+
           echo ""
-          echo "========================================"
-          echo "      SADEE X DIMA V5 SUCCESS"
-          echo "========================================"
+          echo "=========================================="
+          echo "       SADEE X DIMA V6 SUCCESS"
+          echo "=========================================="
           echo ""
-          echo "APK:"
-          echo "SADEE-X-DIMA-V5-APK"
+          echo "USER APK:"
+          echo "SADEE-DIMA-OPTIMIZER-USER.apk"
           echo ""
-          echo "Admin:"
-          echo "gh-pages"
+          echo "ADMIN APK:"
+          echo "SADEE-DIMA-OPTIMIZER-ADMIN.apk"
+          echo ""
+          echo "Admin Dashboard:"
+          echo "gh-pages branch"
           echo ""
           echo "BUILD COMPLETE"
+          echo "=========================================="
