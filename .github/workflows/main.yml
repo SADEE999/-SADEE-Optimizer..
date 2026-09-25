@@ -1,4 +1,4 @@
-name: SADEE X DIMA - AUTO BUILD FIXED
+name: SADEE X DIMA - AUTO BUILD V2 FIX
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   actions: read
 
 concurrency:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    name: Extract, Repair and Build APK
+    name: Extract + Repair Android + Build APK
     runs-on: ubuntu-latest
 
     steps:
@@ -39,8 +39,7 @@ jobs:
           ZIP_FILE="$(find . -type f -iname '*.zip' ! -path './.git/*' | sort | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found in repository."
-            echo "Upload the Flutter ZIP to the repository and commit it."
+            echo "ERROR: ZIP NOT FOUND"
             find . -maxdepth 3 -type f ! -path './.git/*' | sort
             exit 1
           fi
@@ -56,10 +55,10 @@ jobs:
           mkdir -p extracted
           unzip -oq "$ZIP_FILE" -d extracted
 
-          echo "Extracted files:"
-          find extracted -maxdepth 4 -type f | sort | head -300
+          echo "Extracted:"
+          find extracted -maxdepth 5 -type f | sort | head -500
 
-      - name: Detect Flutter Project
+      - name: Detect or Create Flutter Project
         shell: bash
         run: |
           set -e
@@ -79,16 +78,23 @@ jobs:
               PROJECT_DIR="$GITHUB_WORKSPACE/generated_project"
               mkdir -p "$PROJECT_DIR"
               cd "$PROJECT_DIR"
-              flutter create . --project-name sadee_x_dima_optimizer --platforms android
+
+              flutter create . \
+                --project-name sadee_x_dima_optimizer \
+                --platforms=android
+
+              mkdir -p lib/screens
+              cp "$V6_FILE" lib/screens/user_home_v6.dart
             fi
           fi
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Flutter project was not found in the ZIP."
+            echo "ERROR: Flutter project not found."
             exit 1
           fi
 
           PROJECT_DIR="$(realpath "$PROJECT_DIR")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "PROJECT: $PROJECT_DIR"
 
@@ -109,69 +115,64 @@ jobs:
             mkdir -p "$PROJECT_DIR/lib/screens"
             cp "$V6_FILE" "$PROJECT_DIR/lib/screens/user_home_v6.dart"
             echo "V6 UI installed."
-          else
-            echo "V6 UI file not found. Keeping project UI."
           fi
 
-      - name: Repair Old Android Embedding
+      - name: FORCE REPAIR ANDROID PROJECT
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          OLD=false
+          echo "=========================================="
+          echo "FORCING MODERN ANDROID PROJECT"
+          echo "=========================================="
 
-          if [ -d android ]; then
-            if grep -Rqs 'io.flutter.app.FlutterActivity' android 2>/dev/null; then
-              OLD=true
-            fi
+          # The uploaded ZIP may contain an incomplete android/
+          # folder or a project using removed V1 embedding.
+          # Always regenerate Android for this build.
+          rm -rf android
 
-            if grep -Rqs 'io.flutter.app.FlutterApplication' android 2>/dev/null; then
-              OLD=true
-            fi
+          flutter create . \
+            --project-name sadee_x_dima_optimizer \
+            --platforms=android
 
-            if grep -Rqs 'PluginRegistry.Registrar' android 2>/dev/null; then
-              OLD=true
-            fi
-          fi
+          echo "Modern Android project generated."
 
-          if [ "$OLD" = "true" ]; then
-            echo "Old Android V1 embedding detected."
-            rm -rf android
-            flutter create . --project-name sadee_x_dima_optimizer --platforms android
-            echo "Android project regenerated with current Flutter embedding."
-          elif [ ! -d android ]; then
-            echo "Android folder missing. Creating it."
-            flutter create . --project-name sadee_x_dima_optimizer --platforms android
-          else
-            echo "Android project is present."
-          fi
+          test -f android/app/build.gradle || \
+            test -f android/app/build.gradle.kts
 
-      - name: Create Main Dart When Needed
+          test -f android/settings.gradle || \
+            test -f android/settings.gradle.kts
+
+          test -f android/app/src/main/AndroidManifest.xml
+
+          echo "Android structure OK."
+
+      - name: Create Main Dart If Needed
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           if [ ! -f lib/main.dart ] && [ -f lib/screens/user_home_v6.dart ]; then
-            printf '%s\\n' \\
-              "import 'package:flutter/material.dart';" \\
-              "import 'screens/user_home_v6.dart';" \\
-              "" \\
-              "void main() {" \\
-              "  runApp(const SadeeDimaApp());" \\
-              "}" \\
-              "" \\
-              "class SadeeDimaApp extends StatelessWidget {" \\
-              "  const SadeeDimaApp({super.key});" \\
-              "" \\
-              "  @override" \\
-              "  Widget build(BuildContext context) {" \\
-              "    return MaterialApp(" \\
-              "      debugShowCheckedModeBanner: false," \\
-              "      title: 'SADEE X DIMA OPTIMIZER'," \\
-              "      theme: ThemeData.dark(useMaterial3: true)," \\
-              "      home: const UserHomeScreen()," \\
-              "    );" \\
-              "  }" \\
+            printf '%s\n' \
+              "import 'package:flutter/material.dart';" \
+              "import 'screens/user_home_v6.dart';" \
+              "" \
+              "void main() {" \
+              "  runApp(const SadeeDimaApp());" \
+              "}" \
+              "" \
+              "class SadeeDimaApp extends StatelessWidget {" \
+              "  const SadeeDimaApp({super.key});" \
+              "" \
+              "  @override" \
+              "  Widget build(BuildContext context) {" \
+              "    return MaterialApp(" \
+              "      debugShowCheckedModeBanner: false," \
+              "      title: 'SADEE X DIMA OPTIMIZER'," \
+              "      theme: ThemeData.dark(useMaterial3: true)," \
+              "      home: const UserHomeScreen()," \
+              "    );" \
+              "  }" \
               "}" > lib/main.dart
           fi
 
@@ -187,26 +188,28 @@ jobs:
           grep -q '^android.enableJetifier=true$' android/gradle.properties \
             || echo 'android.enableJetifier=true' >> android/gradle.properties
 
-      - name: Verify Android V2
+      - name: Verify No Android V1 Code
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          if grep -Rqs 'io.flutter.app.FlutterActivity' android/app/src/main 2>/dev/null; then
-            echo "ERROR: Old FlutterActivity still exists."
+          set -e
+
+          if grep -Rqs 'io.flutter.app.FlutterActivity' android; then
+            echo "ERROR: V1 FlutterActivity found."
             exit 1
           fi
 
-          if grep -Rqs 'io.flutter.app.FlutterApplication' android/app/src/main 2>/dev/null; then
-            echo "ERROR: Old FlutterApplication still exists."
+          if grep -Rqs 'io.flutter.app.FlutterApplication' android; then
+            echo "ERROR: V1 FlutterApplication found."
             exit 1
           fi
 
-          if grep -Rqs 'PluginRegistry.Registrar' android/app/src/main 2>/dev/null; then
-            echo "ERROR: Old PluginRegistry still exists."
+          if grep -Rqs 'PluginRegistry.Registrar' android; then
+            echo "ERROR: V1 PluginRegistry found."
             exit 1
           fi
 
-          echo "Android V2 embedding check passed."
+          echo "Android V2 check passed."
 
       - name: Flutter Clean
         working-directory: ${{ env.PROJECT_DIR }}
@@ -229,7 +232,14 @@ jobs:
         shell: bash
         run: |
           set -e
-          flutter build apk --release --no-tree-shake-icons
+
+          echo "=========================================="
+          echo "BUILDING APK"
+          echo "=========================================="
+
+          flutter build apk \
+            --release \
+            --no-tree-shake-icons
 
       - name: Prepare APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -240,14 +250,16 @@ jobs:
           APK_FILE="$(find build -type f -name '*.apk' | head -n 1)"
 
           if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK was not created."
+            echo "ERROR: APK NOT FOUND"
             exit 1
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/final-apk"
-          cp "$APK_FILE" "$GITHUB_WORKSPACE/final-apk/SADEE-X-DIMA-OPTIMIZER.apk"
 
-          ls -lh "$GITHUB_WORKSPACE/final-apk/"
+          cp "$APK_FILE" \
+            "$GITHUB_WORKSPACE/final-apk/SADEE-X-DIMA-OPTIMIZER.apk"
+
+          ls -lh "$GITHUB_WORKSPACE/final-apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -257,9 +269,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Build Success
+      - name: Success
         run: |
-          echo "========================================"
+          echo "=========================================="
           echo "SADEE X DIMA OPTIMIZER"
           echo "BUILD SUCCESS"
-          echo "========================================"
+          echo "=========================================="
