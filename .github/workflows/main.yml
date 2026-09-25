@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
@@ -15,25 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-
   build-apk-and-admin:
-
     name: Build APK and Admin
     runs-on: ubuntu-latest
 
     steps:
-
-      # =====================================================
-      # CHECKOUT
-      # =====================================================
-
       - name: Checkout Repository
         uses: actions/checkout@v4
-
-
-      # =====================================================
-      # FIND ZIP
-      # =====================================================
 
       - name: Find Project ZIP
         id: zip
@@ -41,18 +28,11 @@ jobs:
         run: |
           set -e
 
-          echo "=========================================="
-          echo "SEARCHING SADEE X DIMA ZIP"
-          echo "=========================================="
+          echo "========================================"
+          echo "SEARCHING PROJECT ZIP"
+          echo "========================================"
 
-          ZIP_FILE=""
-
-          for f in ./*.zip; do
-            if [ -f "$f" ]; then
-              ZIP_FILE="$f"
-              break
-            fi
-          done
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file found in repository root."
@@ -60,38 +40,24 @@ jobs:
             exit 1
           fi
 
-          echo "ZIP FOUND:"
-          echo "$ZIP_FILE"
-
+          echo "ZIP FOUND: $ZIP_FILE"
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-
-      # =====================================================
-      # EXTRACT
-      # =====================================================
 
       - name: Extract Project ZIP
         shell: bash
         run: |
           set -e
 
+          echo "========================================"
+          echo "EXTRACTING PROJECT"
+          echo "========================================"
+
           rm -rf extracted
           mkdir -p extracted
 
-          echo "=========================================="
-          echo "EXTRACTING ZIP"
-          echo "=========================================="
+          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
 
-          unzip -oq "${{ steps.zip.outputs.zip_file }}" -d extracted
-
-          echo ""
-          echo "EXTRACTED FILES:"
-          find extracted -maxdepth 4 -type f | sort | head -300
-
-
-      # =====================================================
-      # FIND ANDROID PROJECT
-      # =====================================================
+          echo "Extraction complete."
 
       - name: Find Android Project
         id: android
@@ -99,34 +65,20 @@ jobs:
         run: |
           set -e
 
-          echo "=========================================="
+          echo "========================================"
           echo "SEARCHING ANDROID PROJECT"
-          echo "=========================================="
+          echo "========================================"
 
-          PROJECT=""
-
-          while IFS= read -r settings; do
-
-            DIR="$(dirname "$settings")"
-
-            if [ -f "$DIR/app/build.gradle" ] || \
-               [ -f "$DIR/app/build.gradle.kts" ]; then
-
-              PROJECT="$DIR"
-              break
-
-            fi
-
-          done < <(
-            find extracted \
-              -type f \
-              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-              | sort
-          )
+          PROJECT=$(find extracted \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT" ]; then
             echo "ERROR: Android project not found."
-            find extracted -type f | sort
+
+            find extracted -maxdepth 8 -type f | sort
+
             exit 1
           fi
 
@@ -135,32 +87,16 @@ jobs:
 
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
-
-      # =====================================================
-      # JAVA
-      # =====================================================
-
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
-
-
-      # =====================================================
-      # GRADLE
-      # =====================================================
 
       - name: Setup Gradle 8.0
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.0"
-
-
-      # =====================================================
-      # ANDROIDX
-      # =====================================================
 
       - name: Enable AndroidX
         working-directory: ${{ steps.android.outputs.project }}
@@ -178,19 +114,13 @@ jobs:
 
           echo "AndroidX enabled."
 
-
-      # =====================================================
-      # REPOSITORY MODE
-      # =====================================================
-
-      - name: Fix Repository Mode
+      - name: Fix Gradle Repository Mode
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set -e
 
           if [ -f settings.gradle ]; then
-
             sed -i \
               's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle || true
@@ -198,11 +128,9 @@ jobs:
             sed -i \
               's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle || true
-
           fi
 
           if [ -f settings.gradle.kts ]; then
-
             sed -i \
               's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle.kts || true
@@ -210,15 +138,9 @@ jobs:
             sed -i \
               's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle.kts || true
-
           fi
 
-
-      # =====================================================
-      # RESOURCE FIXES
-      # =====================================================
-
-      - name: Fix Resource Files
+      - name: Fix Color Selector
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
@@ -227,335 +149,156 @@ jobs:
           mkdir -p app/src/main/res/color
 
           if [ -f app/src/main/res/values/nav_colors.xml ]; then
-
-            if grep -q "state_checked" \
-              app/src/main/res/values/nav_colors.xml; then
-
-              echo "Moving nav_colors.xml"
-
+            if grep -q "state_checked" app/src/main/res/values/nav_colors.xml; then
               mv \
                 app/src/main/res/values/nav_colors.xml \
                 app/src/main/res/color/nav_colors.xml
-
             fi
-
           fi
 
-
-      # =====================================================
-      # FIX JAVA SOURCE ERRORS
-      # =====================================================
-
-      - name: Fix Supabase Java 17 Compatibility
+      - name: Fix Java Compatibility
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-
           set -e
 
-          FILE="app/src/main/java/com/sadee/optimizer/Supabase.java"
+          echo "========================================"
+          echo "FIXING JAVA SOURCE"
+          echo "========================================"
 
-          echo "=========================================="
-          echo "FIXING SUPABASE JAVA"
-          echo "=========================================="
+          PAGE5="app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java"
+          SUPABASE="app/src/main/java/com/sadee/optimizer/Supabase.java"
+          MAIN="app/src/main/java/com/sadee/optimizer/MainActivity.java"
 
-          if [ ! -f "$FILE" ]; then
-            echo "Supabase.java not found."
-            exit 1
-          fi
+          # --------------------------------------------------
+          # Page5 Bundle import
+          # --------------------------------------------------
 
-          echo ""
-          echo "BEFORE:"
-          grep -n \
-            -E "parseIso|DatatypeConverter|java.time" \
-            "$FILE" || true
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          p = Path("app/src/main/java/com/sadee/optimizer/Supabase.java")
-
-          s = p.read_text()
-
-          old = '''    private static long parseIso(String s) {
-        if (s == null || s.isEmpty()) return 0;
-        try { return java.time.Instant.parse(s).toEpochMilli(); } catch (Exception e) {}
-        try { return javax.xml.bind.DatatypeConverter.parseDateTime(s).getTimeInMillis(); } catch (Exception e) {}
-        return 0;
-    }'''
-
-          new = '''    private static long parseIso(String s) {
-        if (s == null || s.isEmpty()) return 0;
-
-        String[] patterns = {
-            "yyyy-MM-dd'T'HH:mm:ssXXX",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-            "yyyy-MM-dd'T'HH:mm:ss'Z'",
-            "yyyy-MM-dd HH:mm:ssXXX"
-        };
-
-        for (String pattern : patterns) {
-            try {
-                java.text.SimpleDateFormat f =
-                    new java.text.SimpleDateFormat(pattern, java.util.Locale.US);
-
-                f.setLenient(false);
-
-                java.util.Date d = f.parse(s);
-
-                if (d != null) {
-                    return d.getTime();
-                }
-
-            } catch (Exception ignored) {}
-        }
-
-        return 0;
-    }'''
-
-          if old in s:
-              s = s.replace(old, new)
-          else:
-              # Fallback: replace the whole method using boundaries.
-              start = s.find("    private static long parseIso(String s)")
-              end = s.find("\n    }\n}", start)
-
-              if start != -1 and end != -1:
-                  replacement = '''    private static long parseIso(String s) {
-        if (s == null || s.isEmpty()) return 0;
-
-        String[] patterns = {
-            "yyyy-MM-dd'T'HH:mm:ssXXX",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-            "yyyy-MM-dd'T'HH:mm:ss'Z'",
-            "yyyy-MM-dd HH:mm:ssXXX"
-        };
-
-        for (String pattern : patterns) {
-            try {
-                java.text.SimpleDateFormat f =
-                    new java.text.SimpleDateFormat(pattern, java.util.Locale.US);
-
-                f.setLenient(false);
-
-                java.util.Date d = f.parse(s);
-
-                if (d != null) {
-                    return d.getTime();
-                }
-
-            } catch (Exception ignored) {}
-        }
-
-        return 0;
-    }'''
-
-                  s = s[:start] + replacement + s[end+6:]
-
-          # Absolute safety: never leave JAXB reference.
-          s = s.replace(
-              "try { return javax.xml.bind.DatatypeConverter.parseDateTime(s).getTimeInMillis(); } catch (Exception e) {}",
-              ""
-          )
-
-          p.write_text(s)
-
-          PY
-
-          echo ""
-          echo "AFTER:"
-          grep -n \
-            -E "parseIso|DatatypeConverter|java.time" \
-            "$FILE" || true
-
-          if grep -q "javax.xml.bind" "$FILE"; then
-            echo "ERROR: JAXB reference still exists."
-            exit 1
-          fi
-
-          echo "Supabase Java compatibility fixed."
-
-
-      # =====================================================
-      # FIX MAIN ACTIVITY
-      # =====================================================
-
-      - name: Fix MainActivity Cache Cleaner
-        working-directory: ${{ steps.android.outputs.project }}
-        shell: bash
-        run: |
-
-          set -e
-
-          FILE="app/src/main/java/com/sadee/optimizer/MainActivity.java"
-
-          echo "=========================================="
-          echo "FIXING MAINACTIVITY"
-          echo "=========================================="
-
-          if [ ! -f "$FILE" ]; then
-            echo "MainActivity.java not found."
-            exit 1
-          fi
-
-          echo ""
-          echo "SEARCHING getCodeCache():"
-
-          grep -n "getCodeCache" "$FILE" || true
-
-          # Android-safe replacement.
-          # getCacheDir() is sufficient for the app cache cleaner.
-          sed -i \
-            's/clearCache(getCacheDir()); clearCache(getCodeCache());/clearCache(getCacheDir());/' \
-            "$FILE"
-
-          # If formatting differs, remove any remaining getCodeCache call.
-          sed -i \
-            's/clearCache(getCodeCache());//g' \
-            "$FILE"
-
-          echo ""
-          echo "AFTER:"
-
-          grep -n "getCodeCache" "$FILE" || true
-
-          if grep -q "getCodeCache()" "$FILE"; then
-            echo "ERROR: getCodeCache() still exists."
-            exit 1
-          fi
-
-          echo "MainActivity cache cleaner fixed."
-
-
-      # =====================================================
-      # PAGE 5 BUNDLE FIX
-      # =====================================================
-
-      - name: Fix Page5 Bundle Import
-        working-directory: ${{ steps.android.outputs.project }}
-        shell: bash
-        run: |
-
-          set -e
-
-          FILE="app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java"
-
-          if [ -f "$FILE" ]; then
-
-            if ! grep -q "^import android.os.Bundle;" "$FILE"; then
-
+          if [ -f "$PAGE5" ]; then
+            if ! grep -q "^import android.os.Bundle;" "$PAGE5"; then
               sed -i \
                 '/^package com\.sadee\.optimizer;/a import android.os.Bundle;' \
-                "$FILE"
+                "$PAGE5"
+            fi
+          fi
 
+          # --------------------------------------------------
+          # Remove javax.xml.bind dependency
+          # --------------------------------------------------
+
+          if [ -f "$SUPABASE" ]; then
+
+            sed -i \
+              '/javax\.xml\.bind\.DatatypeConverter\.parseDateTime/d' \
+              "$SUPABASE"
+
+            if ! grep -q "^import java.time.Instant;" "$SUPABASE"; then
+              sed -i \
+                '/^package com\.sadee\.optimizer;/a import java.time.Instant;' \
+                "$SUPABASE"
+            fi
+
+            if grep -q "parseDateTime" "$SUPABASE"; then
+              sed -i \
+                's/javax\.xml\.bind\.DatatypeConverter\.parseDateTime(s)\.getTimeInMillis()/Instant.parse(s).toEpochMilli()/g' \
+                "$SUPABASE"
             fi
 
           fi
 
+          # --------------------------------------------------
+          # MainActivity getCodeCache fix
+          # --------------------------------------------------
 
-      # =====================================================
-      # FINAL SOURCE CHECK
-      # =====================================================
+          if [ -f "$MAIN" ]; then
 
-      - name: Verify Source Fixes
-        working-directory: ${{ steps.android.outputs.project }}
-        shell: bash
-        run: |
+            sed -i \
+              's/clearCache(getCacheDir()); clearCache(getCodeCache());/clearCache(getCacheDir());/' \
+              "$MAIN"
 
-          set -e
-
-          echo "=========================================="
-          echo "VERIFYING SOURCE"
-          echo "=========================================="
-
-          if grep -R \
-            -n \
-            "javax.xml.bind" \
-            app/src/main/java; then
-
-            echo "ERROR: javax.xml.bind still exists."
-            exit 1
-
-          fi
-
-          if grep -R \
-            -n \
-            "getCodeCache()" \
-            app/src/main/java; then
-
-            echo "ERROR: getCodeCache() still exists."
-            exit 1
+            sed -i \
+              's/clearCache(getCacheDir());[[:space:]]*clearCache(getCodeCache());/clearCache(getCacheDir());/' \
+              "$MAIN"
 
           fi
 
           echo ""
-          echo "SOURCE CHECK PASSED."
+          echo "JAVA PATCH COMPLETE"
 
-
-      # =====================================================
-      # PROJECT DIAGNOSTICS
-      # =====================================================
-
-      - name: Project Diagnostics
+      - name: Show Fixed Java Files
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
+          echo "========================================"
+          echo "PAGE5"
+          echo "========================================"
 
-          echo "=========================================="
-          echo "JAVA"
-          echo "=========================================="
+          if [ -f app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java ]; then
+            nl -ba app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java | head -80
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "SUPABASE"
+          echo "========================================"
+
+          if [ -f app/src/main/java/com/sadee/optimizer/Supabase.java ]; then
+            nl -ba app/src/main/java/com/sadee/optimizer/Supabase.java | head -220
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "MAIN ACTIVITY"
+          echo "========================================"
+
+          if [ -f app/src/main/java/com/sadee/optimizer/MainActivity.java ]; then
+            nl -ba app/src/main/java/com/sadee/optimizer/MainActivity.java | head -180
+          fi
+
+      - name: Check Android Project
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "JAVA VERSION"
+          echo "========================================"
 
           java -version
 
           echo ""
-          echo "=========================================="
-          echo "GRADLE"
-          echo "=========================================="
+          echo "========================================"
+          echo "GRADLE VERSION"
+          echo "========================================"
 
           gradle --version
 
           echo ""
-          echo "=========================================="
-          echo "ANDROID SOURCES"
-          echo "=========================================="
+          echo "========================================"
+          echo "ANDROID JAVA FILES"
+          echo "========================================"
 
-          find app/src/main/java \
-            -type f \
-            -name "*.java" \
-            | sort
-
-
-      # =====================================================
-      # CLEAN
-      # =====================================================
+          find app/src/main/java -type f -name "*.java" | sort
 
       - name: Clean Project
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-
           set -e
 
-          gradle clean \
-            --no-daemon \
-            --stacktrace
-
-
-      # =====================================================
-      # BUILD
-      # =====================================================
+          gradle clean --no-daemon
 
       - name: Build APK
         id: build
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-
           set +e
 
-          echo "=========================================="
-          echo "BUILDING SADEE X DIMA"
-          echo "=========================================="
+          echo "========================================"
+          echo "BUILDING SADEE X DIMA APK"
+          echo "========================================"
 
           gradle assembleDebug \
             --no-daemon \
@@ -566,55 +309,57 @@ jobs:
           RESULT=${PIPESTATUS[0]}
 
           echo ""
-          echo "=========================================="
+          echo "========================================"
           echo "BUILD RESULT"
-          echo "=========================================="
+          echo "========================================"
 
           echo "EXIT CODE: $RESULT"
 
           if [ "$RESULT" != "0" ]; then
 
             echo ""
-            echo "=========================================="
-            echo "ERRORS"
-            echo "=========================================="
+            echo "========================================"
+            echo "COMPILER ERRORS"
+            echo "========================================"
 
             grep -n \
-              -A25 \
+              -A20 \
               -B10 \
-              "error:" \
-              build.log | tail -500 || true
+              "cannot find symbol" \
+              build.log | tail -300 || true
+
+            echo ""
+            echo "========================================"
+            echo "ALL ERRORS"
+            echo "========================================"
+
+            grep -n \
+              -E \
+              "error:|cannot find symbol|symbol:|location:" \
+              build.log | tail -300 || true
 
             exit "$RESULT"
-
           fi
 
           echo ""
-          echo "=========================================="
+          echo "========================================"
           echo "APK BUILD SUCCESS"
-          echo "=========================================="
-
-
-      # =====================================================
-      # LOCATE APK
-      # =====================================================
+          echo "========================================"
 
       - name: Locate APK
         if: success()
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
+          echo "========================================"
+          echo "APK OUTPUT"
+          echo "========================================"
 
           find app/build/outputs \
             -type f \
             -name "*.apk" \
             -print \
             -exec ls -lh {} \;
-
-
-      # =====================================================
-      # UPLOAD APK
-      # =====================================================
 
       - name: Upload APK
         if: success()
@@ -625,11 +370,6 @@ jobs:
             ${{ steps.android.outputs.project }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-
-      # =====================================================
-      # BUILD LOG
-      # =====================================================
-
       - name: Upload Build Log
         if: always()
         uses: actions/upload-artifact@v4
@@ -639,28 +379,19 @@ jobs:
             ${{ steps.android.outputs.project }}/build.log
           if-no-files-found: ignore
 
-
-      # =====================================================
-      # FIND ADMIN
-      # =====================================================
-
       - name: Find Admin Dashboard
         id: admin
         shell: bash
         run: |
-
           set -e
 
-          echo "=========================================="
+          echo "========================================"
           echo "SEARCHING ADMIN DASHBOARD"
-          echo "=========================================="
-
-          ADMIN=""
+          echo "========================================"
 
           ADMIN=$(find extracted \
             -type d \
             -name "admin-dashboard" \
-            | sort \
             | head -n 1)
 
           if [ -z "$ADMIN" ]; then
@@ -668,43 +399,35 @@ jobs:
             INDEX=$(find extracted \
               -type f \
               -name "index.html" \
-              | sort \
               | head -n 1)
 
-            if [ -n "$INDEX" ]; then
-              ADMIN="$(dirname "$INDEX")"
+            if [ -z "$INDEX" ]; then
+              echo "ERROR: Admin dashboard not found."
+
+              find extracted \
+                -type f \
+                -name "*.html" \
+                | sort
+
+              exit 1
             fi
 
+            ADMIN=$(dirname "$INDEX")
           fi
 
-          if [ -z "$ADMIN" ]; then
-
-            echo "ERROR: Admin dashboard not found."
-
-            find extracted \
-              -type f \
-              -name "*.html" \
-              | sort
-
-            exit 1
-
-          fi
-
-          echo "ADMIN:"
+          echo "ADMIN DASHBOARD:"
           echo "$ADMIN"
 
           echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
 
-
-      # =====================================================
-      # PREPARE ADMIN
-      # =====================================================
-
       - name: Prepare Admin Dashboard
         shell: bash
         run: |
-
           set -e
+
+          echo "========================================"
+          echo "PREPARING ADMIN DASHBOARD"
+          echo "========================================"
 
           rm -rf public
           mkdir -p public
@@ -715,17 +438,13 @@ jobs:
 
           touch public/.nojekyll
 
-          echo "ADMIN READY"
+          echo ""
+          echo "ADMIN FILES:"
 
           find public \
             -maxdepth 10 \
             -type f \
             | sort
-
-
-      # =====================================================
-      # DEPLOY ADMIN
-      # =====================================================
 
       - name: Deploy Admin Dashboard
         uses: peaceiris/actions-gh-pages@v4
