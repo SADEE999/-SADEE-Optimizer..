@@ -142,12 +142,54 @@ jobs:
             --stacktrace \
             --info 2>&1 | tee build.log
 
-      - name: Upload Release APK
+      - name: Sign Release APK
+        id: sign_apk
+        if: success()
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: |
+          set -e
+
+          UNSIGNED=$(find app/build/outputs/apk/release -type f -name '*-unsigned.apk' | head -n 1)
+          if [ -z "$UNSIGNED" ]; then
+            echo "ERROR: unsigned APK not found"
+            find app/build/outputs/apk -type f -name '*.apk' -print || true
+            exit 1
+          fi
+
+          KEYSTORE="$RUNNER_TEMP/sadee-debug.keystore"
+          keytool -genkeypair -v \
+            -keystore "$KEYSTORE" \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "ERROR: apksigner not found"
+            exit 1
+          fi
+
+          SIGNED="app/build/outputs/apk/release/SADEE-X-DIMA-OPTIMIZER-release.apk"
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE" \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$SIGNED" \
+            "$UNSIGNED"
+
+          "$APKSIGNER" verify --verbose "$SIGNED"
+          echo "Signed APK: $SIGNED"
+
+      - name: Upload Signed Release APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-FINAL-APK
-          path: ${{ steps.android.outputs.project }}/app/build/outputs/apk/release/*.apk
+          name: SADEE-X-DIMA-FINAL-SIGNED-APK
+          path: ${{ steps.android.outputs.project }}/app/build/outputs/apk/release/SADEE-X-DIMA-OPTIMIZER-release.apk
           if-no-files-found: error
           retention-days: 30
 
