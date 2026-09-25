@@ -1,4 +1,4 @@
-name: SADEE X DIMA REAL BUILD
+name: SADEE X DIMA V5 BUILD
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: sadee-x-dima-build
+  group: sadee-x-dima-v5
   cancel-in-progress: true
 
 jobs:
@@ -27,15 +27,15 @@ jobs:
         uses: actions/checkout@v4
 
       # =========================================================
-      # 2. FIND ZIP
+      # 2. FIND ZIP UPLOADED TO GITHUB
       # =========================================================
-      - name: Find Uploaded ZIP
+      - name: Find Project ZIP
         id: zip
         shell: bash
         run: |
           set -e
 
-          echo "Searching repository for ZIP..."
+          echo "Searching for project ZIP..."
 
           ZIP_FILE="$(find . \
             -type f \
@@ -45,8 +45,7 @@ jobs:
             | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found."
-            echo "Upload your SADEE X DIMA ZIP to the repository."
+            echo "::error::No ZIP file found in repository."
             exit 1
           fi
 
@@ -58,7 +57,7 @@ jobs:
       # =========================================================
       # 3. EXTRACT ZIP
       # =========================================================
-      - name: Extract ZIP
+      - name: Extract Project ZIP
         shell: bash
         run: |
           set -e
@@ -71,22 +70,23 @@ jobs:
             -d extracted
 
           echo ""
-          echo "========================================"
-          echo "EXTRACTED PROJECT"
-          echo "========================================"
+          echo "===== EXTRACTED FILES ====="
 
-          find extracted -maxdepth 5 -type f | head -400
+          find extracted \
+            -maxdepth 6 \
+            -type f \
+            | head -500
 
       # =========================================================
       # 4. FIND ANDROID PROJECT
       # =========================================================
-      - name: Locate Android Project
+      - name: Find Android Project
         id: android
         shell: bash
         run: |
           set -e
 
-          echo "Searching for Android Gradle project..."
+          echo "Searching for Android project..."
 
           SETTINGS_FILE="$(
             find extracted \
@@ -100,18 +100,18 @@ jobs:
           )"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle not found."
+            echo "::error::settings.gradle not found."
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
           PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
-          echo "ANDROID PROJECT:"
+          echo "Android project:"
           echo "$PROJECT_DIR"
 
           if [ ! -d "$PROJECT_DIR/app" ]; then
-            echo "ERROR: app directory not found."
+            echo "::error::app directory not found."
             exit 1
           fi
 
@@ -155,31 +155,40 @@ jobs:
       # =========================================================
       # 8. FORCE GRADLE WRAPPER 8.7
       # =========================================================
-      - name: Fix Gradle Wrapper
+      - name: Force Gradle Wrapper 8.7
         shell: bash
         run: |
           set -e
 
           PROJECT="${{ steps.android.outputs.project_dir }}"
-
           WRAPPER="$PROJECT/gradle/wrapper/gradle-wrapper.properties"
 
           if [ -f "$WRAPPER" ]; then
 
-            echo "Old Gradle wrapper:"
+            echo "Before:"
             cat "$WRAPPER"
 
-            sed -i -E \
-              's#gradle-[0-9]+(\.[0-9]+)*-(bin|all)\.zip#gradle-8.7-\3.zip#g' \
-              "$WRAPPER"
+            python3 - "$WRAPPER" <<'PY'
+          import sys
+          import re
 
-            # Fallback if the first replacement did not match
-            sed -i -E \
-              's#gradle-[0-9.]+-(bin|all)\.zip#gradle-8.7-\1.zip#g' \
-              "$WRAPPER"
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          text = re.sub(
+              r'gradle-[0-9.]+-(bin|all)\.zip',
+              r'gradle-8.7-\1.zip',
+              text
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+          PY
 
             echo ""
-            echo "New Gradle wrapper:"
+            echo "After:"
             cat "$WRAPPER"
 
           fi
@@ -199,32 +208,31 @@ jobs:
           fi
 
       # =========================================================
-      # 10. ANDROID RESOURCE FIXES
+      # 10. FIX ANDROID XML
       # =========================================================
-      - name: Fix Android Resources
+      - name: Fix Android XML Resources
         shell: bash
         run: |
           set -e
 
           PROJECT="${{ steps.android.outputs.project_dir }}"
-
           RES="$PROJECT/app/src/main/res"
 
           if [ ! -d "$RES" ]; then
-            echo "ERROR: Android res directory not found."
+            echo "::error::res directory not found."
             exit 1
           fi
 
-          echo "Fixing XML compatibility..."
+          echo "Fixing hintTextColor..."
 
-          # hintTextColor -> textColorHint
           find "$RES" \
             -type f \
             -name '*.xml' \
             -exec sed -i \
             's/android:hintTextColor=/android:textColorHint=/g' {} \;
 
-          # Move color selector from values to color
+          echo "Checking nav_colors.xml..."
+
           if [ -f "$RES/values/nav_colors.xml" ]; then
 
             mkdir -p "$RES/color"
@@ -233,16 +241,14 @@ jobs:
               "$RES/values/nav_colors.xml" \
               "$RES/color/nav_colors.xml"
 
-            echo "nav_colors.xml moved."
+            echo "nav_colors.xml moved to res/color."
 
           fi
 
-          echo "Resource fixes complete."
-
       # =========================================================
-      # 11. JAVA SOURCE FIXES
+      # 11. FIX JAVA SOURCE
       # =========================================================
-      - name: Fix Java Source
+      - name: Fix Java Source Compatibility
         shell: bash
         run: |
           set -e
@@ -251,13 +257,13 @@ jobs:
           JAVA_DIR="$PROJECT/app/src/main/java"
 
           if [ ! -d "$JAVA_DIR" ]; then
-            echo "No Java directory found."
+            echo "No Java directory."
             exit 0
           fi
 
-          echo "Searching Java source..."
-
+          # -----------------------------------------------------
           # Bundle import
+          # -----------------------------------------------------
           while IFS= read -r FILE; do
 
             if grep -q "class Page5InjectorFragment" "$FILE"; then
@@ -278,7 +284,9 @@ jobs:
               -name '*.java'
           )
 
-          # javax.xml.bind -> java.time
+          # -----------------------------------------------------
+          # javax.xml.bind compatibility
+          # -----------------------------------------------------
           while IFS= read -r FILE; do
 
             if grep -q "javax.xml.bind.DatatypeConverter" "$FILE"; then
@@ -298,7 +306,7 @@ jobs:
               r'\.getTimeInMillis\(\)'
           )
 
-          def replace(match):
+          def replacement(match):
               value = match.group(1)
 
               return (
@@ -307,7 +315,11 @@ jobs:
                   ").toInstant().toEpochMilli()"
               )
 
-          text = re.sub(pattern, replace, text)
+          text = re.sub(
+              pattern,
+              replacement,
+              text
+          )
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(text)
@@ -321,35 +333,10 @@ jobs:
               -name '*.java'
           )
 
-          echo "Java fixes complete."
-
       # =========================================================
-      # 12. CHECK SUPABASE CONFIG
+      # 12. VERIFY CONFIG
       # =========================================================
-      - name: Check Supabase Configuration
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT="${{ steps.android.outputs.project_dir }}"
-
-          echo "Searching Supabase configuration..."
-
-          grep -Rni \
-            --include='*.java' \
-            --include='*.kt' \
-            "supabase.co" \
-            "$PROJECT/app/src/main" \
-            || true
-
-          echo ""
-          echo "NOTE:"
-          echo "Do NOT put a Supabase service-role/secret key in the APK."
-
-      # =========================================================
-      # 13. PROJECT INFO
-      # =========================================================
-      - name: Show Project Configuration
+      - name: Verify Project
         shell: bash
         run: |
           set -e
@@ -357,26 +344,10 @@ jobs:
           PROJECT="${{ steps.android.outputs.project_dir }}"
 
           echo "========================================"
-          echo "PROJECT"
+          echo "ANDROID PROJECT"
           echo "========================================"
 
           echo "$PROJECT"
-
-          echo ""
-          echo "========================================"
-          echo "SETTINGS.GRADLE"
-          echo "========================================"
-
-          cat "$PROJECT/settings.gradle" 2>/dev/null || \
-          cat "$PROJECT/settings.gradle.kts" 2>/dev/null || true
-
-          echo ""
-          echo "========================================"
-          echo "APP BUILD.GRADLE"
-          echo "========================================"
-
-          cat "$PROJECT/app/build.gradle" 2>/dev/null || \
-          cat "$PROJECT/app/build.gradle.kts" 2>/dev/null || true
 
           echo ""
           echo "========================================"
@@ -392,10 +363,21 @@ jobs:
 
           gradle --version
 
+          echo ""
+          echo "========================================"
+          echo "APP BUILD FILE"
+          echo "========================================"
+
+          if [ -f "$PROJECT/app/build.gradle" ]; then
+            cat "$PROJECT/app/build.gradle"
+          elif [ -f "$PROJECT/app/build.gradle.kts" ]; then
+            cat "$PROJECT/app/build.gradle.kts"
+          fi
+
       # =========================================================
-      # 14. CLEAN
+      # 13. CLEAN
       # =========================================================
-      - name: Clean Android Project
+      - name: Clean Project
         shell: bash
         run: |
           set -e
@@ -407,7 +389,7 @@ jobs:
           gradle clean --stacktrace
 
       # =========================================================
-      # 15. BUILD APK
+      # 14. BUILD APK
       # =========================================================
       - name: Build Debug APK
         id: build
@@ -420,7 +402,7 @@ jobs:
           cd "$PROJECT"
 
           echo "========================================"
-          echo "SADEE X DIMA APK BUILD"
+          echo "SADEE X DIMA V5 BUILD"
           echo "========================================"
 
           gradle assembleDebug \
@@ -428,17 +410,17 @@ jobs:
             --info \
             2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
-          BUILD_STATUS=${PIPESTATUS[0]}
+          STATUS=${PIPESTATUS[0]}
 
           echo ""
-          echo "BUILD STATUS: $BUILD_STATUS"
+          echo "BUILD EXIT CODE: $STATUS"
 
-          exit "$BUILD_STATUS"
+          exit "$STATUS"
 
       # =========================================================
-      # 16. FIND APK
+      # 15. FIND APK
       # =========================================================
-      - name: Find Generated APK
+      - name: Find APK
         id: apk
         if: success()
         shell: bash
@@ -455,41 +437,41 @@ jobs:
           )"
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK not found."
+            echo "::error::APK not found."
             exit 1
           fi
 
-          echo "APK:"
+          echo "APK FOUND:"
           echo "$APK"
 
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
 
       # =========================================================
-      # 17. UPLOAD APK
+      # 16. UPLOAD APK
       # =========================================================
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-LOGIN-FIXED-V3-APK
+          name: SADEE-X-DIMA-V5-APK
           path: ${{ steps.apk.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 30
 
       # =========================================================
-      # 18. UPLOAD BUILD LOG
+      # 17. UPLOAD BUILD LOG
       # =========================================================
       - name: Upload Build Log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-BUILD-LOG
+          name: SADEE-X-DIMA-V5-BUILD-LOG
           path: build.log
           if-no-files-found: warn
           retention-days: 30
 
       # =========================================================
-      # 19. FIND ADMIN DASHBOARD
+      # 18. FIND ADMIN DASHBOARD
       # =========================================================
       - name: Find Admin Dashboard
         id: admin
@@ -499,12 +481,10 @@ jobs:
 
           ADMIN_DIR=""
 
-          # First preference
           if [ -d "extracted/admin-dashboard" ]; then
             ADMIN_DIR="extracted/admin-dashboard"
           fi
 
-          # Search index.html
           if [ -z "$ADMIN_DIR" ]; then
 
             INDEX_FILE="$(
@@ -522,7 +502,7 @@ jobs:
 
           if [ -z "$ADMIN_DIR" ]; then
 
-            echo "Admin dashboard not found."
+            echo "No Admin Dashboard found."
 
             echo "found=false" >> "$GITHUB_OUTPUT"
 
@@ -536,7 +516,7 @@ jobs:
           echo "path=$ADMIN_DIR" >> "$GITHUB_OUTPUT"
 
       # =========================================================
-      # 20. PREPARE ADMIN
+      # 19. PREPARE ADMIN
       # =========================================================
       - name: Prepare Admin Dashboard
         if: success() && steps.admin.outputs.found == 'true'
@@ -551,17 +531,15 @@ jobs:
             "${{ steps.admin.outputs.path }}/." \
             public/
 
-          echo "========================================"
-          echo "ADMIN DASHBOARD FILES"
-          echo "========================================"
+          echo "===== ADMIN FILES ====="
 
           find public \
-            -maxdepth 4 \
+            -maxdepth 5 \
             -type f \
             | sort
 
       # =========================================================
-      # 21. DEPLOY ADMIN
+      # 20. DEPLOY ADMIN
       # =========================================================
       - name: Deploy Admin Dashboard
         if: success() && steps.admin.outputs.found == 'true'
@@ -571,23 +549,24 @@ jobs:
           publish_branch: gh-pages
           publish_dir: ./public
           force_orphan: true
-          commit_message: "Deploy SADEE X DIMA Admin Dashboard"
+          commit_message: "Deploy SADEE X DIMA V5 Admin"
 
       # =========================================================
-      # 22. FINAL
+      # 21. SUCCESS
       # =========================================================
       - name: Build Complete
         if: success()
         shell: bash
         run: |
+          echo ""
           echo "========================================"
-          echo "SADEE X DIMA BUILD SUCCESS"
+          echo "      SADEE X DIMA V5 SUCCESS"
           echo "========================================"
           echo ""
-          echo "APK artifact:"
-          echo "SADEE-X-DIMA-LOGIN-FIXED-V3-APK"
+          echo "APK:"
+          echo "SADEE-X-DIMA-V5-APK"
           echo ""
-          echo "Admin dashboard:"
-          echo "Deployed to gh-pages"
+          echo "Admin:"
+          echo "gh-pages"
           echo ""
           echo "BUILD COMPLETE"
