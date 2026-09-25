@@ -1,4 +1,4 @@
-name: SADEE X DIMA - V3 BUILD & ADMIN
+name: SADEE X DIMA - ZIP AUTO BUILD
 
 on:
   push:
@@ -10,52 +10,71 @@ permissions:
   contents: write
 
 concurrency:
-  group: sadee-x-dima-v3
+  group: sadee-x-dima-build
   cancel-in-progress: true
 
 jobs:
 
-  build-android:
-    name: Build Android APK
+  # ==========================================
+  # EXTRACT ZIP + BUILD APK
+  # ==========================================
+
+  build-apk:
+    name: Extract ZIP & Build APK
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Find ZIP
+      - name: Find ZIP in Repository Root
         id: zip
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE=""
+          echo "======================================"
+          echo "SEARCHING FOR ZIP"
+          echo "======================================"
 
-          if [ -f "./SADEE_X_DIMA_V3_SINGLE_DASHBOARD.zip" ]; then
-            ZIP_FILE="./SADEE_X_DIMA_V3_SINGLE_DASHBOARD.zip"
-          else
-            ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
-          fi
+          ZIP_FILE=$(find . \
+            -maxdepth 1 \
+            -type f \
+            -iname "*.zip" \
+            | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found"
-            ls -la
+            echo "ERROR: No ZIP file found in repository root."
+            echo ""
+            echo "Repository files:"
+            ls -lah
             exit 1
           fi
 
-          echo "Using: $ZIP_FILE"
+          echo "ZIP FOUND:"
+          echo "$ZIP_FILE"
+
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Extract ZIP
+        shell: bash
         run: |
           set -e
+
+          echo "======================================"
+          echo "EXTRACTING ZIP"
+          echo "======================================"
 
           rm -rf extracted
           mkdir -p extracted
 
-          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
+          unzip -o \
+            "${{ steps.zip.outputs.zip_file }}" \
+            -d extracted
 
+          echo ""
+          echo "EXTRACTED FILES:"
           find extracted -maxdepth 8 -type f | sort
 
       - name: Find Android Project
@@ -66,16 +85,21 @@ jobs:
 
           PROJECT=$(find extracted \
             -type f \
-            -name "settings.gradle" \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
             -printf '%h\n' \
             | head -n 1)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: settings.gradle not found"
+            echo "ERROR: Android project not found."
+            echo ""
+            echo "Extracted files:"
+            find extracted -maxdepth 10 -type f | sort
             exit 1
           fi
 
-          echo "Android project: $PROJECT"
+          echo "ANDROID PROJECT:"
+          echo "$PROJECT"
+
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
       - name: Setup Java 17
@@ -93,6 +117,8 @@ jobs:
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
+          set -e
+
           touch gradle.properties
 
           sed -i '/^android.useAndroidX=/d' gradle.properties || true
@@ -101,6 +127,8 @@ jobs:
           echo "android.useAndroidX=true" >> gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
 
+          echo ""
+          echo "gradle.properties:"
           cat gradle.properties
 
       - name: Fix Repository Mode
@@ -110,6 +138,7 @@ jobs:
           set -e
 
           if [ -f settings.gradle ]; then
+
             sed -i \
               's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle || true
@@ -117,15 +146,30 @@ jobs:
             sed -i \
               's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle || true
+
           fi
 
-          cat settings.gradle
+          if [ -f settings.gradle.kts ]; then
 
-      - name: Build APK
+            sed -i \
+              's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
+              settings.gradle.kts || true
+
+            sed -i \
+              's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
+              settings.gradle.kts || true
+
+          fi
+
+      - name: Build Debug APK
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set +e
+
+          echo "======================================"
+          echo "BUILDING APK"
+          echo "======================================"
 
           gradle \
             clean \
@@ -138,7 +182,9 @@ jobs:
           RESULT=${PIPESTATUS[0]}
 
           echo ""
-          echo "========== ERROR SUMMARY =========="
+          echo "======================================"
+          echo "BUILD ERROR SUMMARY"
+          echo "======================================"
 
           grep -E \
             "FAILURE:|error:|Error:|Caused by:|Execution failed|AAPT|resource|Manifest" \
@@ -146,7 +192,8 @@ jobs:
             | tail -200 || true
 
           echo ""
-          echo "Gradle exit code: $RESULT"
+          echo "GRADLE EXIT CODE:"
+          echo "$RESULT"
 
           exit "$RESULT"
 
@@ -154,7 +201,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gradle-build-log
+          name: sadee-x-dima-build-log
           path: |
             ${{ steps.android.outputs.project }}/build.log
           if-no-files-found: ignore
@@ -163,19 +210,23 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-V3-APK
+          name: SADEE-X-DIMA-APK
           path: |
             ${{ steps.android.outputs.project }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
 
+  # ==========================================
+  # EXTRACT ZIP + DEPLOY ADMIN DASHBOARD
+  # ==========================================
+
   deploy-admin:
-    name: Deploy Admin Dashboard
+    name: Extract ZIP & Deploy Admin
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Find ZIP
@@ -184,29 +235,34 @@ jobs:
         run: |
           set -e
 
-          ZIP_FILE=""
-
-          if [ -f "./SADEE_X_DIMA_V3_SINGLE_DASHBOARD.zip" ]; then
-            ZIP_FILE="./SADEE_X_DIMA_V3_SINGLE_DASHBOARD.zip"
-          else
-            ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
-          fi
+          ZIP_FILE=$(find . \
+            -maxdepth 1 \
+            -type f \
+            -iname "*.zip" \
+            | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP not found"
+            echo "ERROR: ZIP file not found."
+            ls -lah
             exit 1
           fi
 
+          echo "ZIP FOUND:"
+          echo "$ZIP_FILE"
+
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Extract
+      - name: Extract ZIP
+        shell: bash
         run: |
           set -e
 
           rm -rf extracted
           mkdir -p extracted
 
-          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
+          unzip -o \
+            "${{ steps.zip.outputs.zip_file }}" \
+            -d extracted
 
       - name: Find Admin Dashboard
         id: admin
@@ -220,23 +276,36 @@ jobs:
             | head -n 1)
 
           if [ -z "$ADMIN" ]; then
+
+            echo "admin-dashboard folder not found."
+            echo "Searching for index.html..."
+
             INDEX=$(find extracted \
               -type f \
               -name "index.html" \
               | head -n 1)
 
             if [ -z "$INDEX" ]; then
-              echo "ERROR: index.html not found"
+              echo "ERROR: Admin dashboard not found."
+
+              find extracted \
+                -maxdepth 10 \
+                -type f \
+                | sort
+
               exit 1
             fi
 
             ADMIN=$(dirname "$INDEX")
           fi
 
-          echo "Admin: $ADMIN"
+          echo "ADMIN DASHBOARD:"
+          echo "$ADMIN"
+
           echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Website
+        shell: bash
         run: |
           set -e
 
@@ -249,7 +318,16 @@ jobs:
 
           touch public/.nojekyll
 
-      - name: Publish GitHub Pages
+          echo "======================================"
+          echo "WEBSITE FILES"
+          echo "======================================"
+
+          find public \
+            -maxdepth 10 \
+            -type f \
+            | sort
+
+      - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
