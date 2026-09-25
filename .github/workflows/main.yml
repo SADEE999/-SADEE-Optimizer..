@@ -1,51 +1,73 @@
-name: SADEE X DIMA REAL BUILD
+name: SADEE X DIMA • BUILD APK + ADMIN
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: sadee-x-dima-real-build
+  group: sadee-x-dima-build
   cancel-in-progress: true
 
 jobs:
   build-apk-and-admin:
     name: Build APK and Admin
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Find and extract project ZIP
+      - name: Find ZIP and Extract
         id: project
         shell: bash
         run: |
-          set -euo pipefail
-          echo '========================================='
-          echo 'SEARCHING REPOSITORY FOR PROJECT ZIP'
-          echo '========================================='
-          ZIP="$(find . -type f -iname '*.zip' ! -path './.git/*' ! -path './extracted/*' ! -path './public/*' | head -n 1 || true)"
+          set -e
+          echo "=========================================="
+          echo "SEARCHING FOR PROJECT ZIP"
+          echo "=========================================="
+
+          # Prefer a ZIP in the repository root.
+          ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" -print -quit)
+
+          # If the root is empty, also allow the ZIP in a sub-folder.
           if [ -z "$ZIP" ]; then
-            echo 'ERROR: No project ZIP found.'
-            echo 'Upload the generated SADEE_X_DIMA_FULL_FINAL.zip to the repository and commit it.'
-            echo 'Repository files:'
-            find . -maxdepth 4 -type f | sort
+            ZIP=$(find . -type f -iname "*.zip" \
+              ! -path "./.git/*" \
+              ! -path "./extracted/*" \
+              -print -quit)
+          fi
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No ZIP file found."
+            echo "Upload the generated SADEE_X_DIMA_FULL_FINAL.zip to the GitHub repository and commit it."
+            echo ""
+            echo "Repository files:"
+            find . -maxdepth 3 -type f -not -path "./.git/*" | sort
             exit 1
           fi
+
           echo "ZIP FOUND: $ZIP"
+
           rm -rf extracted
           mkdir -p extracted
           unzip -o "$ZIP" -d extracted
-          PROJECT="$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -printf '%h\n' | head -n 1 || true)"
+
+          PROJECT=$(find extracted -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -printf '%h\n' | head -n 1)
+
           if [ -z "$PROJECT" ]; then
-            echo 'ERROR: No Android settings.gradle/settings.gradle.kts found inside the ZIP.'
+            echo "ERROR: Android project was not found inside the ZIP."
+            echo ""
             find extracted -maxdepth 8 -type f | sort
             exit 1
           fi
+
           echo "ANDROID PROJECT: $PROJECT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
@@ -53,49 +75,25 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
-
-      - name: Android build environment fixes
-        working-directory: ${{ steps.project.outputs.project }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          touch gradle.properties
-          grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
-          grep -q '^android.nonTransitiveRClass=' gradle.properties || echo 'android.nonTransitiveRClass=true' >> gradle.properties
-          if [ -f settings.gradle ]; then
-            sed -i 's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' settings.gradle || true
-            sed -i 's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' settings.gradle || true
-          fi
-          if [ -f settings.gradle.kts ]; then
-            sed -i 's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' settings.gradle.kts || true
-            sed -i 's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' settings.gradle.kts || true
-          fi
-          echo 'Build environment prepared.'
+          gradle-version: "8.7"
 
       - name: Build APK
         id: build
         working-directory: ${{ steps.project.outputs.project }}
         shell: bash
         run: |
-          set +e
+          set -e
+          echo "=========================================="
+          echo "BUILDING SADEE X DIMA APK"
+          echo "=========================================="
           gradle clean assembleDebug --no-daemon --stacktrace --info 2>&1 | tee build.log
-          RESULT=${PIPESTATUS[0]}
-          echo "Gradle exit code: $RESULT"
-          if [ "$RESULT" != '0' ]; then
-            echo '========================================='
-            echo 'COMPILER ERRORS'
-            echo '========================================='
-            grep -n -A18 -B8 -E 'error:|cannot find symbol|symbol:|location:' build.log | tail -350 || true
-            exit "$RESULT"
-          fi
 
-      - name: Upload APK artifact
+      - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -103,7 +101,7 @@ jobs:
           path: ${{ steps.project.outputs.project }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-      - name: Upload build log
+      - name: Upload Build Log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -111,36 +109,52 @@ jobs:
           path: ${{ steps.project.outputs.project }}/build.log
           if-no-files-found: ignore
 
-      - name: Find admin dashboard
+      - name: Find Admin Dashboard
         id: admin
         shell: bash
         run: |
-          set -euo pipefail
-          ADMIN="$(find extracted -type f -path '*/admin-dashboard/index.html' -printf '%h\n' | head -n 1 || true)"
+          set -e
+          echo "=========================================="
+          echo "SEARCHING FOR ADMIN DASHBOARD"
+          echo "=========================================="
+
+          ADMIN=$(find extracted -type f \
+            -path "*/admin-dashboard/index.html" \
+            -printf '%h\n' | head -n 1)
+
           if [ -z "$ADMIN" ]; then
-            INDEX="$(find extracted -type f -name index.html ! -path '*/node_modules/*' | head -n 1 || true)"
+            INDEX=$(find extracted -type f \
+              -name "index.html" \
+              ! -path "*/node_modules/*" \
+              -print | head -n 1)
+
             if [ -z "$INDEX" ]; then
-              echo 'ERROR: admin-dashboard/index.html not found inside ZIP.'
-              find extracted -type f -name '*.html' | sort
+              echo "ERROR: admin-dashboard/index.html not found."
+              find extracted -type f -name "*.html" | sort
               exit 1
             fi
-            ADMIN="$(dirname "$INDEX")"
+
+            ADMIN=$(dirname "$INDEX")
           fi
-          echo "ADMIN: $ADMIN"
+
+          echo "ADMIN DASHBOARD: $ADMIN"
           echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare admin Pages
+      - name: Prepare GitHub Pages
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           rm -rf public
           mkdir -p public
           cp -R "${{ steps.admin.outputs.admin }}/." public/
           touch public/.nojekyll
-          echo 'Admin files:'
-          find public -maxdepth 3 -type f | sort
 
-      - name: Deploy admin dashboard
+          echo "=========================================="
+          echo "ADMIN FILES"
+          echo "=========================================="
+          find public -maxdepth 5 -type f | sort
+
+      - name: Deploy Admin to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
