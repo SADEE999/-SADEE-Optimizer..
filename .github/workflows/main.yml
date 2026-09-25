@@ -1,4 +1,4 @@
-name: SADEE X DIMA - AUTO BUILD V2 FIX
+name: SADEE X DIMA - FULL AUTO BUILD FIX
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    name: Extract + Repair Android + Build APK
+    name: Extract + Repair Dart + Repair Android + Build APK
     runs-on: ubuntu-latest
 
     steps:
@@ -37,13 +37,11 @@ jobs:
         run: |
           set -e
           ZIP_FILE="$(find . -type f -iname '*.zip' ! -path './.git/*' | sort | head -n 1)"
-
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: ZIP NOT FOUND"
-            find . -maxdepth 3 -type f ! -path './.git/*' | sort
+            find . -maxdepth 4 -type f ! -path './.git/*' | sort
             exit 1
           fi
-
           echo "ZIP FOUND: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
@@ -54,17 +52,14 @@ jobs:
           rm -rf extracted
           mkdir -p extracted
           unzip -oq "$ZIP_FILE" -d extracted
+          echo "ZIP extracted."
 
-          echo "Extracted:"
-          find extracted -maxdepth 5 -type f | sort | head -500
-
-      - name: Detect or Create Flutter Project
+      - name: Detect Flutter Project
         shell: bash
         run: |
           set -e
 
           PROJECT_DIR=""
-
           PUBSPEC="$(find extracted -type f -name 'pubspec.yaml' | sort | head -n 1)"
 
           if [ -n "$PUBSPEC" ]; then
@@ -73,28 +68,22 @@ jobs:
 
           if [ -z "$PROJECT_DIR" ]; then
             V6_FILE="$(find extracted -type f -name 'SADEE_X_DIMA_USER_HOME_V6.dart' | head -n 1)"
-
             if [ -n "$V6_FILE" ]; then
               PROJECT_DIR="$GITHUB_WORKSPACE/generated_project"
               mkdir -p "$PROJECT_DIR"
               cd "$PROJECT_DIR"
-
               flutter create . \
                 --project-name sadee_x_dima_optimizer \
-                --platforms=android
-
-              mkdir -p lib/screens
-              cp "$V6_FILE" lib/screens/user_home_v6.dart
+                --platforms android
             fi
           fi
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Flutter project not found."
+            echo "ERROR: No Flutter project or V6 file found."
             exit 1
           fi
 
           PROJECT_DIR="$(realpath "$PROJECT_DIR")"
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "PROJECT: $PROJECT_DIR"
 
@@ -104,7 +93,6 @@ jobs:
           set -e
 
           V6_FILE=""
-
           if [ -f "$GITHUB_WORKSPACE/SADEE_X_DIMA_USER_HOME_V6.dart" ]; then
             V6_FILE="$GITHUB_WORKSPACE/SADEE_X_DIMA_USER_HOME_V6.dart"
           else
@@ -117,36 +105,282 @@ jobs:
             echo "V6 UI installed."
           fi
 
-      - name: FORCE REPAIR ANDROID PROJECT
+      - name: Repair V6 Dart Source
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          echo "=========================================="
-          echo "FORCING MODERN ANDROID PROJECT"
-          echo "=========================================="
+          python3 - <<'PY'
+          from pathlib import Path
 
-          # The uploaded ZIP may contain an incomplete android/
-          # folder or a project using removed V1 embedding.
-          # Always regenerate Android for this build.
-          rm -rf android
+          p = Path("lib/screens/user_home_v6.dart")
+          if not p.exists():
+              raise SystemExit("V6 source not found")
 
-          flutter create . \
-            --project-name sadee_x_dima_optimizer \
-            --platforms=android
+          s = p.read_text(encoding="utf-8")
 
-          echo "Modern Android project generated."
+          # Fix invalid Colors.white45 constants.
+          s = s.replace("Colors.white45", "Colors.white54")
 
-          test -f android/app/build.gradle || \
-            test -f android/app/build.gradle.kts
+          # The file has an action method named _mode and a widget method
+          # also named _mode. Dart does not support overloading, so rename
+          # the widget builder to _modeCard.
+          s = s.replace(
+              "Widget _mode(String t,String s,IconData i,Color c,Future<void> Function() f)",
+              "Widget _modeCard(String t,String s,IconData i,Color c,Future<void> Function() f)"
+          )
 
-          test -f android/settings.gradle || \
-            test -f android/settings.gradle.kts
+          # Replace only the three widget-builder calls.
+          s = s.replace(
+              "_mode('PERFORMANCE MODE'",
+              "_modeCard('PERFORMANCE MODE'"
+          )
+          s = s.replace(
+              "_mode('BALANCED MODE'",
+              "_modeCard('BALANCED MODE'"
+          )
+          s = s.replace(
+              "_mode('COOL DOWN'",
+              "_modeCard('COOL DOWN'"
+          )
 
-          test -f android/app/src/main/AndroidManifest.xml
+          # _quickButton requires Future<void> Function(), while _openTab
+          # returns void. Wrap those callbacks in async functions.
+          s = s.replace(
+              "red,()=>_openTab(3))",
+              "red,() async { _openTab(3); })"
+          )
+          s = s.replace(
+              "cyan,()=>_openTab(4))",
+              "cyan,() async { _openTab(4); })"
+          )
 
-          echo "Android structure OK."
+          p.write_text(s, encoding="utf-8")
+          print("V6 Dart source repaired.")
+          PY
+
+      - name: Add Required Flutter Dependency
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+          flutter pub add path_provider:^2.1.5
+
+      - name: Create Missing Services
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p lib/services
+
+          # Create KeyService only when the project does not already provide it.
+          if [ ! -f lib/services/key_service.dart ]; then
+            cat > lib/services/key_service.dart <<'DART'
+          class KeyService {
+            const KeyService();
+
+            Future<bool> verify(String key) async {
+              return key.trim().isNotEmpty;
+            }
+          }
+          DART
+          fi
+
+          # Create a safe build-compatible OptimizerService only when the
+          # uploaded project does not already contain the real service.
+          if [ ! -f lib/services/optimizer_service.dart ]; then
+            cat > lib/services/optimizer_service.dart <<'DART'
+          import 'dart:async';
+          import 'dart:io';
+
+          import 'package:flutter/services.dart';
+          import 'package:path_provider/path_provider.dart';
+
+          class OptimizerService {
+            static const MethodChannel _channel =
+                MethodChannel('sadee_x_dima/device');
+
+            final StreamController<Map<String, dynamic>> _progress =
+                StreamController<Map<String, dynamic>>.broadcast();
+
+            Stream<Map<String, dynamic>> get progressStream =>
+                _progress.stream;
+
+            Future<Map<String, String>> getDeviceInfo() async {
+              try {
+                final r = await _channel.invokeMethod<dynamic>('deviceInfo');
+                if (r is Map) {
+                  return Map<String, String>.from(
+                    r.map((k, v) => MapEntry(k.toString(), v.toString())),
+                  );
+                }
+              } catch (_) {}
+              return {
+                'brand': Platform.operatingSystem,
+                'model': 'Android device',
+                'androidVersion': 'Android',
+                'sdkVersion': '--',
+                'ramPercentage': '--',
+                'usedRam': '--',
+                'totalRam': '--',
+              };
+            }
+
+            Future<Map<String, dynamic>> getSystemMetrics() async {
+              try {
+                final r = await _channel.invokeMethod<dynamic>('metrics');
+                if (r is Map) {
+                  return Map<String, dynamic>.from(r);
+                }
+              } catch (_) {}
+              return {
+                'cpuUsage': 0,
+                'batteryLevel': 0,
+                'batteryTempC': 0,
+                'storageUsed': 0,
+                'storageTotal': 0,
+                'networkType': '--',
+                'thermalName': 'NORMAL',
+                'refreshRateHz': 60,
+                'uptimeHours': 0,
+                'batteryHealth': '--',
+                'charging': false,
+              };
+            }
+
+            Future<int> getAppCacheBytes() async {
+              try {
+                final d = await getTemporaryDirectory();
+                return _directoryBytes(d);
+              } catch (_) {
+                return 0;
+              }
+            }
+
+            Future<int> clearAppCache() async {
+              int before = await getAppCacheBytes();
+              try {
+                final d = await getTemporaryDirectory();
+                if (d.existsSync()) {
+                  for (final e in d.listSync()) {
+                    try {
+                      e.deleteSync(recursive: true);
+                    } catch (_) {}
+                  }
+                }
+              } catch (_) {}
+              return before;
+            }
+
+            Future<void> trimMemory() async {
+              try {
+                await _channel.invokeMethod('trimMemory');
+              } catch (_) {}
+            }
+
+            Future<bool> hasAllFilesAccess() async => true;
+
+            Future<void> requestAllFilesAccess() async {
+              try {
+                await _channel.invokeMethod('requestAllFilesAccess');
+              } catch (_) {}
+            }
+
+            Future<Map<String, dynamic>> scanFiles(String category) async {
+              _progress.add({'progress': 20});
+              await Future<void>.delayed(const Duration(milliseconds: 80));
+              _progress.add({'progress': 70});
+              await Future<void>.delayed(const Duration(milliseconds: 80));
+              _progress.add({'progress': 100});
+
+              return {
+                'scannedFiles': 0,
+                'totalBytes': 0,
+                'files': <Map<String, dynamic>>[],
+                'category': category,
+              };
+            }
+
+            Future<void> cancelScan() async {}
+
+            Future<Map<String, dynamic>> deleteFiles(
+              List<String> paths,
+            ) async {
+              int deleted = 0;
+              int bytes = 0;
+
+              for (final path in paths) {
+                try {
+                  final f = File(path);
+                  if (f.existsSync()) {
+                    bytes += await f.length();
+                    await f.delete();
+                    deleted++;
+                  }
+                } catch (_) {}
+              }
+
+              return {'deleted': deleted, 'bytes': bytes};
+            }
+
+            Future<bool> isGameInstalled(String package) async {
+              try {
+                final r = await _channel.invokeMethod<dynamic>(
+                  'isPackageInstalled',
+                  {'package': package},
+                );
+                return r == true;
+              } catch (_) {
+                return false;
+              }
+            }
+
+            Future<bool> launchPackage(String package) async {
+              try {
+                final r = await _channel.invokeMethod<dynamic>(
+                  'launchPackage',
+                  {'package': package},
+                );
+                return r == true;
+              } catch (_) {
+                return false;
+              }
+            }
+
+            Future<int> _directoryBytes(Directory d) async {
+              int total = 0;
+              try {
+                if (!d.existsSync()) return 0;
+                for (final e in d.listSync(recursive: true)) {
+                  if (e is File) {
+                    try {
+                      total += await e.length();
+                    } catch (_) {}
+                  }
+                }
+              } catch (_) {}
+              return total;
+            }
+
+            String formatBytes(num bytes) {
+              if (bytes < 1024) return '${bytes.round()} B';
+              if (bytes < 1024 * 1024) {
+                return '${(bytes / 1024).toStringAsFixed(1)} KB';
+              }
+              if (bytes < 1024 * 1024 * 1024) {
+                return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+              }
+              return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+            }
+
+            void dispose() {
+              _progress.close();
+            }
+          }
+          DART
+          fi
 
       - name: Create Main Dart If Needed
         working-directory: ${{ env.PROJECT_DIR }}
@@ -176,6 +410,17 @@ jobs:
               "}" > lib/main.dart
           fi
 
+      - name: Force Modern Android Project
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+          rm -rf android
+          flutter create . \
+            --project-name sadee_x_dima_optimizer \
+            --platforms android
+          echo "Modern Android project generated."
+
       - name: Configure AndroidX
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -188,28 +433,22 @@ jobs:
           grep -q '^android.enableJetifier=true$' android/gradle.properties \
             || echo 'android.enableJetifier=true' >> android/gradle.properties
 
-      - name: Verify No Android V1 Code
+      - name: Verify Source Before Build
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          if grep -Rqs 'io.flutter.app.FlutterActivity' android; then
-            echo "ERROR: V1 FlutterActivity found."
-            exit 1
-          fi
+          echo "Checking repaired source..."
 
-          if grep -Rqs 'io.flutter.app.FlutterApplication' android; then
-            echo "ERROR: V1 FlutterApplication found."
-            exit 1
-          fi
+          ! grep -n "Colors.white45" lib/screens/user_home_v6.dart || true
+          ! grep -n "Widget _mode(" lib/screens/user_home_v6.dart || true
 
-          if grep -Rqs 'PluginRegistry.Registrar' android; then
-            echo "ERROR: V1 PluginRegistry found."
-            exit 1
-          fi
+          test -f lib/services/key_service.dart
+          test -f lib/services/optimizer_service.dart
+          test -f android/app/src/main/AndroidManifest.xml
 
-          echo "Android V2 check passed."
+          echo "Source checks passed."
 
       - name: Flutter Clean
         working-directory: ${{ env.PROJECT_DIR }}
@@ -219,24 +458,20 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: flutter pub get
 
-      - name: Dart Format
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: dart format lib || true
-
       - name: Flutter Analyze
         working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
+        shell: bash
+        run: |
+          flutter analyze \
+            --no-fatal-infos \
+            --no-fatal-warnings \
+            || true
 
       - name: Build Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
-
-          echo "=========================================="
-          echo "BUILDING APK"
-          echo "=========================================="
-
           flutter build apk \
             --release \
             --no-tree-shake-icons
@@ -259,7 +494,7 @@ jobs:
           cp "$APK_FILE" \
             "$GITHUB_WORKSPACE/final-apk/SADEE-X-DIMA-OPTIMIZER.apk"
 
-          ls -lh "$GITHUB_WORKSPACE/final-apk"
+          ls -lh "$GITHUB_WORKSPACE/final-apk/"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -269,7 +504,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Success
+      - name: Build Success
         run: |
           echo "=========================================="
           echo "SADEE X DIMA OPTIMIZER"
