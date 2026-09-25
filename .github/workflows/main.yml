@@ -1,27 +1,17 @@
-name: SADEE X DIMA - REAL APP + ADMIN
+name: SADEE X DIMA REAL BUILD
 
 on:
   push:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: sadee-x-dima-release
-  cancel-in-progress: true
-
 jobs:
-
-  # =========================================================
-  # BUILD ANDROID APP
-  # =========================================================
-
-  build-apk:
-    name: Build SADEE X DIMA APK
+  build:
+    name: Build APK and Admin
     runs-on: ubuntu-latest
 
     steps:
@@ -29,291 +19,127 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-
-      # -------------------------------------------------------
-      # FIND ZIP
-      # -------------------------------------------------------
-
-      - name: Find Project ZIP
+      - name: Find ZIP
         id: zip
-        shell: bash
         run: |
-
           set -e
 
-          ZIP_FILE=$(find . \
-            -maxdepth 1 \
-            -type f \
-            -iname "*.zip" \
-            | head -n 1)
+          ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found."
-            echo ""
-            echo "Repository files:"
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: ZIP file not found in repository root."
             ls -la
             exit 1
           fi
 
-          echo "ZIP FOUND:"
-          echo "$ZIP_FILE"
+          echo "Found: $ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-
-      # -------------------------------------------------------
-      # EXTRACT
-      # -------------------------------------------------------
-
-      - name: Extract Project
-        shell: bash
+      - name: Extract ZIP
         run: |
-
           set -e
 
           rm -rf extracted
+          mkdir extracted
 
-          mkdir -p extracted
+          unzip -o "${{ steps.zip.outputs.zip }}" -d extracted
 
-          unzip -o \
-            "${{ steps.zip.outputs.zip_file }}" \
-            -d extracted
-
-          echo ""
-          echo "======================================"
-          echo "EXTRACTED PROJECT"
-          echo "======================================"
-
-          find extracted \
-            -maxdepth 8 \
-            -type f \
-            | sort
-
-
-      # -------------------------------------------------------
-      # FIND ANDROID PROJECT
-      # -------------------------------------------------------
+          echo "Extracted files:"
+          find extracted -maxdepth 6 -type f | sort
 
       - name: Find Android Project
         id: android
-        shell: bash
         run: |
-
           set -e
 
           PROJECT=$(find extracted \
             -type f \
             -name "settings.gradle" \
-            -printf '%h\n' \
-            | head -n 1)
+            -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT" ]; then
             echo "ERROR: Android project not found."
             exit 1
           fi
 
-          echo "ANDROID PROJECT:"
-          echo "$PROJECT"
-
+          echo "Android project: $PROJECT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
-
-      # -------------------------------------------------------
-      # JAVA
-      # -------------------------------------------------------
-
-      - name: Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-
-      # -------------------------------------------------------
-      # GRADLE
-      # -------------------------------------------------------
-
-      - name: Setup Gradle 8.0
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.0"
 
-
-      # -------------------------------------------------------
-      # ANDROIDX
-      # -------------------------------------------------------
-
       - name: Enable AndroidX
         working-directory: ${{ steps.android.outputs.project }}
-        shell: bash
         run: |
-
           touch gradle.properties
 
-          sed -i '/^android\.useAndroidX=/d' \
-            gradle.properties || true
+          sed -i '/android.useAndroidX/d' gradle.properties || true
+          sed -i '/android.enableJetifier/d' gradle.properties || true
 
-          sed -i '/^android\.enableJetifier=/d' \
-            gradle.properties || true
+          echo "android.useAndroidX=true" >> gradle.properties
+          echo "android.enableJetifier=true" >> gradle.properties
 
-          echo "android.useAndroidX=true" \
-            >> gradle.properties
+      - name: Fix Repository Mode
+        working-directory: ${{ steps.android.outputs.project }}
+        run: |
+          if [ -f settings.gradle ]; then
+            sed -i \
+              's/RepositoriesMode.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
+              settings.gradle || true
 
-          echo "android.enableJetifier=true" \
-            >> gradle.properties
-
-
-      # -------------------------------------------------------
-      # BUILD
-      # -------------------------------------------------------
+            sed -i \
+              's/RepositoriesMode.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
+              settings.gradle || true
+          fi
 
       - name: Build APK
         working-directory: ${{ steps.android.outputs.project }}
-        shell: bash
         run: |
-
           set -e
 
-          echo "======================================"
-          echo "BUILDING SADEE X DIMA"
-          echo "======================================"
-
-          gradle \
-            clean \
-            assembleDebug \
+          gradle clean assembleDebug \
             --no-daemon \
             --stacktrace
 
-          echo ""
-          echo "APK OUTPUT:"
-          find app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            -print
-
-
-      # -------------------------------------------------------
-      # COPY APK
-      # -------------------------------------------------------
-
-      - name: Prepare APK
-        shell: bash
+      - name: Find APK
+        id: apk
         run: |
-
           set -e
 
           APK=$(find \
             "${{ steps.android.outputs.project }}/app/build/outputs/apk" \
             -type f \
-            -name "*.apk" \
-            | head -n 1)
+            -name "*.apk" | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK not generated."
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          mkdir -p release
-
-          cp "$APK" \
-            release/SADEE_X_DIMA.apk
-
-          echo "APK READY:"
-          ls -lh release/SADEE_X_DIMA.apk
-
-
-      # -------------------------------------------------------
-      # UPLOAD APK
-      # -------------------------------------------------------
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SADEE-X-DIMA-APK
-          path: release/SADEE_X_DIMA.apk
-          if-no-files-found: error
-
-
-  # =========================================================
-  # ADMIN DASHBOARD
-  # =========================================================
-
-  deploy-admin:
-    name: Build & Deploy Admin Dashboard
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-
-      # -------------------------------------------------------
-      # FIND ZIP
-      # -------------------------------------------------------
-
-      - name: Find Project ZIP
-        id: zip
-        shell: bash
-        run: |
-
-          set -e
-
-          ZIP_FILE=$(find . \
-            -maxdepth 1 \
-            -type f \
-            -iname "*.zip" \
-            | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found."
-            exit 1
-          fi
-
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-
-      # -------------------------------------------------------
-      # EXTRACT
-      # -------------------------------------------------------
-
-      - name: Extract Project
-        shell: bash
-        run: |
-
-          set -e
-
-          rm -rf extracted
-
-          mkdir -p extracted
-
-          unzip -o \
-            "${{ steps.zip.outputs.zip_file }}" \
-            -d extracted
-
-
-      # -------------------------------------------------------
-      # FIND ADMIN
-      # -------------------------------------------------------
+          echo "APK: $APK"
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Find Admin Dashboard
         id: admin
-        shell: bash
         run: |
-
           set -e
 
           ADMIN=$(find extracted \
             -type d \
-            -name "admin-dashboard" \
-            | head -n 1)
+            -name "admin-dashboard" | head -n 1)
 
           if [ -z "$ADMIN" ]; then
-
             INDEX=$(find extracted \
               -type f \
-              -name "index.html" \
-              | head -n 1)
+              -name "index.html" | head -n 1)
 
             if [ -z "$INDEX" ]; then
               echo "ERROR: Admin dashboard not found."
@@ -321,28 +147,17 @@ jobs:
             fi
 
             ADMIN=$(dirname "$INDEX")
-
           fi
 
-          echo "ADMIN DASHBOARD:"
-          echo "$ADMIN"
-
+          echo "Admin: $ADMIN"
           echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
 
-
-      # -------------------------------------------------------
-      # PREPARE PAGES
-      # -------------------------------------------------------
-
       - name: Prepare Admin
-        shell: bash
         run: |
-
           set -e
 
           rm -rf public
-
-          mkdir -p public
+          mkdir public
 
           cp -R \
             "${{ steps.admin.outputs.admin }}/." \
@@ -350,19 +165,7 @@ jobs:
 
           touch public/.nojekyll
 
-          echo ""
-          echo "ADMIN FILES:"
-          find public \
-            -maxdepth 8 \
-            -type f \
-            | sort
-
-
-      # -------------------------------------------------------
-      # DEPLOY
-      # -------------------------------------------------------
-
-      - name: Deploy Admin Dashboard
+      - name: Deploy Admin
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -371,131 +174,41 @@ jobs:
           force_orphan: true
           enable_jekyll: false
 
-
-      # -------------------------------------------------------
-      # ADMIN ARTIFACT
-      # -------------------------------------------------------
-
-      - name: Upload Admin Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SADEE-X-DIMA-ADMIN
-          path: public
-          if-no-files-found: error
-
-
-  # =========================================================
-  # CREATE ONE FINAL RELEASE
-  # =========================================================
-
-  release-package:
-    name: Create One Final Release ZIP
-    runs-on: ubuntu-latest
-
-    needs:
-      - build-apk
-      - deploy-admin
-
-    steps:
-
-      - name: Download APK
-        uses: actions/download-artifact@v4
-        with:
-          name: SADEE-X-DIMA-APK
-          path: release/apk
-
-
-      - name: Download Admin
-        uses: actions/download-artifact@v4
-        with:
-          name: SADEE-X-DIMA-ADMIN
-          path: release/admin
-
-
-      # -------------------------------------------------------
-      # PACKAGE
-      # -------------------------------------------------------
-
       - name: Create Final Package
-        shell: bash
         run: |
-
           set -e
 
+          rm -rf final
           mkdir -p final/ADMIN_DASHBOARD
 
           cp \
-            release/apk/SADEE_X_DIMA.apk \
+            "${{ steps.apk.outputs.apk }}" \
             final/SADEE_X_DIMA.apk
 
           cp -R \
-            release/admin/. \
+            public/. \
             final/ADMIN_DASHBOARD/
 
-          cat > final/README.txt <<'EOF'
-SADEE X DIMA REAL RELEASE
-
-SADEE_X_DIMA.apk
-----------------
-Android application.
-
-ADMIN_DASHBOARD/
-----------------
-Real Supabase admin dashboard.
-
-The dashboard is deployed separately to GitHub Pages.
-
-The application and dashboard must use the same Supabase
-project/database configuration.
-
-No service-role/secret key should be placed in the frontend.
-EOF
-
-          echo "======================================"
-          echo "FINAL RELEASE CONTENT"
-          echo "======================================"
-
-          find final \
-            -maxdepth 6 \
-            -type f \
-            | sort
-
-
-      # -------------------------------------------------------
-      # ZIP
-      # -------------------------------------------------------
-
-      - name: Create Final ZIP
-        shell: bash
-        run: |
-
-          set -e
+          echo "SADEE X DIMA REAL RELEASE" > final/README.txt
+          echo "" >> final/README.txt
+          echo "SADEE_X_DIMA.apk = Android application" >> final/README.txt
+          echo "ADMIN_DASHBOARD = Web admin dashboard" >> final/README.txt
 
           cd final
 
-          zip -r \
-            ../SADEE_X_DIMA_REAL_RELEASE.zip \
-            .
+          zip -r ../SADEE_X_DIMA_REAL_RELEASE.zip .
 
           cd ..
 
-          echo ""
-          echo "======================================"
-          echo "FINAL RELEASE"
-          echo "======================================"
+          echo "================================"
+          echo "FINAL ZIP"
+          echo "================================"
 
-          ls -lh \
-            SADEE_X_DIMA_REAL_RELEASE.zip
+          ls -lh SADEE_X_DIMA_REAL_RELEASE.zip
 
           echo ""
-          echo "ZIP CONTENT:"
-          unzip -l \
-            SADEE_X_DIMA_REAL_RELEASE.zip
-
-
-      # -------------------------------------------------------
-      # FINAL ARTIFACT
-      # -------------------------------------------------------
+          echo "CONTENTS:"
+          unzip -l SADEE_X_DIMA_REAL_RELEASE.zip
 
       - name: Upload Final Release
         uses: actions/upload-artifact@v4
