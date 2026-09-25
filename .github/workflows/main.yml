@@ -39,7 +39,6 @@ jobs:
         id: zip
         shell: bash
         run: |
-
           set -e
 
           echo "========================================"
@@ -53,7 +52,7 @@ jobs:
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found in repository root."
+            echo "ERROR: No ZIP file found in repository root."
             ls -lah
             exit 1
           fi
@@ -71,7 +70,6 @@ jobs:
       - name: Extract ZIP
         shell: bash
         run: |
-
           set -e
 
           echo "========================================"
@@ -85,7 +83,6 @@ jobs:
             "${{ steps.zip.outputs.zip_file }}" \
             -d extracted
 
-          echo ""
           echo "ZIP EXTRACTION COMPLETE"
 
 
@@ -97,7 +94,6 @@ jobs:
         id: android
         shell: bash
         run: |
-
           set -e
 
           echo "========================================"
@@ -115,7 +111,6 @@ jobs:
             | head -n 1)
 
           if [ -z "$PROJECT" ]; then
-
             echo "ERROR: Android project not found."
 
             find extracted \
@@ -154,14 +149,13 @@ jobs:
 
 
       # ======================================================
-      # ANDROIDX
+      # ENABLE ANDROIDX
       # ======================================================
 
       - name: Enable AndroidX
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-
           set -e
 
           touch gradle.properties
@@ -174,24 +168,20 @@ jobs:
             '/^android.enableJetifier=/d' \
             gradle.properties || true
 
-          echo "android.useAndroidX=true" \
-            >> gradle.properties
-
-          echo "android.enableJetifier=true" \
-            >> gradle.properties
+          echo "android.useAndroidX=true" >> gradle.properties
+          echo "android.enableJetifier=true" >> gradle.properties
 
           echo "AndroidX enabled."
 
 
       # ======================================================
-      # GRADLE REPOSITORY FIX
+      # FIX GRADLE REPOSITORY MODE
       # ======================================================
 
       - name: Fix Repository Mode
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-
           set -e
 
           if [ -f settings.gradle ]; then
@@ -220,14 +210,13 @@ jobs:
 
 
       # ======================================================
-      # COLOR SELECTOR FIX
+      # FIX COLOR SELECTOR
       # ======================================================
 
-      - name: Fix Color Selector
+      - name: Fix Color Selector Resources
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-
           set -e
 
           mkdir -p app/src/main/res/color
@@ -237,7 +226,7 @@ jobs:
             if grep -q "state_checked" \
               app/src/main/res/values/nav_colors.xml; then
 
-              echo "Moving nav_colors.xml..."
+              echo "Moving nav_colors.xml to res/color..."
 
               mv \
                 app/src/main/res/values/nav_colors.xml \
@@ -249,28 +238,89 @@ jobs:
 
 
       # ======================================================
+      # FIX PAGE5 BUNDLE IMPORT
+      # ======================================================
+
+      - name: Fix Page5InjectorFragment Bundle Import
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: |
+          set -e
+
+          FILE="app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java"
+
+          echo "========================================"
+          echo "CHECKING PAGE5 INJECTOR"
+          echo "========================================"
+
+          if [ ! -f "$FILE" ]; then
+            echo "Page5InjectorFragment.java not found."
+            exit 1
+          fi
+
+          echo ""
+          echo "BEFORE:"
+          sed -n '1,25p' "$FILE"
+
+          # Add Bundle import if missing
+          if ! grep -q "^import android.os.Bundle;" "$FILE"; then
+
+            echo ""
+            echo "Adding missing Bundle import..."
+
+            sed -i \
+              '/^package com\.sadee\.optimizer;/a import android.os.Bundle;' \
+              "$FILE"
+
+          fi
+
+          echo ""
+          echo "AFTER:"
+          sed -n '1,25p' "$FILE"
+
+
+      # ======================================================
+      # CHECK IMPORTANT JAVA IMPORTS
+      # ======================================================
+
+      - name: Check Page5 Java File
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: |
+          set -e
+
+          FILE="app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java"
+
+          echo "========================================"
+          echo "PAGE5 SOURCE"
+          echo "========================================"
+
+          nl -ba "$FILE" | sed -n '1,80p'
+
+
+      # ======================================================
       # PROJECT CHECK
       # ======================================================
 
-      - name: Check Project
+      - name: Check Android Project
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
 
           echo "========================================"
-          echo "PROJECT INFORMATION"
+          echo "ANDROID PROJECT CHECK"
           echo "========================================"
 
           echo ""
-          echo "Java:"
+          echo "JAVA:"
           java -version
 
           echo ""
-          echo "Gradle:"
+          echo "GRADLE:"
           gradle --version
 
           echo ""
-          echo "Android Java files:"
+          echo "JAVA SOURCES:"
 
           find app/src/main/java \
             -type f \
@@ -286,7 +336,6 @@ jobs:
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-
           set -e
 
           gradle clean --no-daemon
@@ -297,6 +346,7 @@ jobs:
       # ======================================================
 
       - name: Build APK
+        id: build
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
@@ -304,7 +354,7 @@ jobs:
           set +e
 
           echo "========================================"
-          echo "BUILDING APK"
+          echo "BUILDING SADEE X DIMA APK"
           echo "========================================"
 
           gradle \
@@ -316,11 +366,18 @@ jobs:
 
           RESULT=${PIPESTATUS[0]}
 
+          echo ""
+          echo "========================================"
+          echo "BUILD RESULT"
+          echo "========================================"
+
+          echo "EXIT CODE: $RESULT"
+
           if [ "$RESULT" != "0" ]; then
 
             echo ""
             echo "========================================"
-            echo "JAVA COMPILER ERROR"
+            echo "JAVA COMPILER ERRORS"
             echo "========================================"
 
             grep -n \
@@ -354,10 +411,6 @@ jobs:
               build.log \
               | tail -300 || true
 
-            echo ""
-            echo "BUILD EXIT CODE:"
-            echo "$RESULT"
-
             exit "$RESULT"
 
           fi
@@ -369,17 +422,17 @@ jobs:
 
 
       # ======================================================
-      # FIND APK
+      # LOCATE APK
       # ======================================================
 
-      - name: Find APK
+      - name: Locate APK
         if: success()
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
 
           echo "========================================"
-          echo "APK FILES"
+          echo "APK OUTPUT"
           echo "========================================"
 
           find app/build/outputs \
@@ -390,7 +443,7 @@ jobs:
 
 
       # ======================================================
-      # APK ARTIFACT
+      # UPLOAD APK
       # ======================================================
 
       - name: Upload APK
@@ -404,7 +457,7 @@ jobs:
 
 
       # ======================================================
-      # BUILD LOG ARTIFACT
+      # UPLOAD BUILD LOG
       # ======================================================
 
       - name: Upload Build Log
@@ -418,7 +471,7 @@ jobs:
 
 
       # ======================================================
-      # FIND ADMIN DASHBOARD
+      # FIND ADMIN
       # ======================================================
 
       - name: Find Admin Dashboard
@@ -475,14 +528,14 @@ jobs:
       # PREPARE ADMIN
       # ======================================================
 
-      - name: Prepare Admin
+      - name: Prepare Admin Dashboard
         shell: bash
         run: |
 
           set -e
 
           echo "========================================"
-          echo "PREPARING ADMIN"
+          echo "PREPARING ADMIN DASHBOARD"
           echo "========================================"
 
           rm -rf public
