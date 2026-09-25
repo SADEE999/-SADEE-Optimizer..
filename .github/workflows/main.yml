@@ -19,391 +19,355 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find ZIP Anywhere In Repository
-        id: zip
+      - name: Find ZIP
+        id: find_zip
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "SEARCHING FOR PROJECT ZIP"
-          echo "======================================"
-
-          ZIP_FILE=""
-
-          # First search root
-          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" \
-            ! -path "./.git/*" | head -n 1 || true)
-
-          # If not found, search subfolders
-          if [ -z "$ZIP_FILE" ]; then
-            ZIP_FILE=$(find . -type f -iname "*.zip" \
-              ! -path "./.git/*" \
-              ! -path "./extracted/*" | head -n 1 || true)
-          fi
+          ZIP_FILE="$(find . -type f -iname '*.zip' \
+            -not -path './.git/*' \
+            -not -path './extracted/*' \
+            | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file found."
-            echo ""
-            echo "Repository contents:"
-            find . -maxdepth 4 -type f | sort
             exit 1
           fi
 
-          echo "ZIP FOUND:"
-          echo "$ZIP_FILE"
+          echo "ZIP found: $ZIP_FILE"
+          echo "zip=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Extract ZIP
+      - name: Extract project ZIP
         shell: bash
         run: |
           set -e
-
-          echo "======================================"
-          echo "EXTRACTING PROJECT ZIP"
-          echo "======================================"
 
           rm -rf extracted
           mkdir -p extracted
 
-          unzip -o "${{ steps.zip.outputs.zip_file }}" \
-            -d extracted
+          unzip -o "${{ steps.find_zip.outputs.zip }}" -d extracted
 
-          echo ""
-          echo "EXTRACTED FILES:"
-          find extracted -maxdepth 5 -type f | sort | head -500
+          echo "===== EXTRACTED FILES ====="
+          find extracted -maxdepth 4 -type f | head -200
 
-      - name: Find Android Project
-        id: android
+      - name: Find Android project
+        id: android_project
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "SEARCHING ANDROID PROJECT"
-          echo "======================================"
+          PROJECT_DIR="$(find extracted -type f -name 'settings.gradle' \
+            -o -type f -name 'settings.gradle.kts' \
+            | head -n 1 | xargs -r dirname)"
 
-          PROJECT=$(find extracted \
-            -type f \
-            \( -name "settings.gradle" \
-            -o -name "settings.gradle.kts" \) \
-            -printf '%h\n' | head -n 1)
-
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: Android project not found."
-
-            find extracted -type f \
-              \( -name "settings.gradle" \
-              -o -name "settings.gradle.kts" \
-              -o -name "build.gradle" \
-              -o -name "gradlew" \) \
-              | sort
-
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android Gradle project not found."
             exit 1
           fi
 
-          echo "PROJECT:"
-          echo "$PROJECT"
+          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
-          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
+          echo "project=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Setup Java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      - name: Setup Gradle 8.0
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.0"
+          gradle-version: '8.0'
 
-      - name: Prepare Android Project
-        working-directory: ${{ steps.android.outputs.project }}
+      - name: Configure AndroidX
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "PREPARING ANDROID PROJECT"
-          echo "======================================"
+          PROJECT="${{ steps.android_project.outputs.project }}"
 
-          touch gradle.properties
+          cat > "$PROJECT/gradle.properties" <<'EOF'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          EOF
 
-          sed -i '/^android.useAndroidX=/d' gradle.properties || true
-          sed -i '/^android.enableJetifier=/d' gradle.properties || true
+          echo "gradle.properties created."
 
-          echo "android.useAndroidX=true" >> gradle.properties
-          echo "android.enableJetifier=true" >> gradle.properties
-
-          # Repository mode compatibility
-          if [ -f settings.gradle ]; then
-            sed -i \
-              's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
-              settings.gradle || true
-
-            sed -i \
-              's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
-              settings.gradle || true
-          fi
-
-          if [ -f settings.gradle.kts ]; then
-            sed -i \
-              's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
-              settings.gradle.kts || true
-
-            sed -i \
-              's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
-              settings.gradle.kts || true
-          fi
-
-      - name: Fix Known Android Source Errors
-        working-directory: ${{ steps.android.outputs.project }}
+      - name: Fix Gradle repository mode
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "FIXING KNOWN SOURCE ERRORS"
-          echo "======================================"
+          PROJECT="${{ steps.android_project.outputs.project }}"
 
-          # Page5 Bundle import
-          FILE="app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java"
+          if [ -f "$PROJECT/settings.gradle" ]; then
+            python3 - "$PROJECT/settings.gradle" <<'PY'
+          import sys
 
-          if [ -f "$FILE" ]; then
-            if ! grep -q "^import android.os.Bundle;" "$FILE"; then
-              sed -i \
-                '/^package com\.sadee\.optimizer;/a import android.os.Bundle;' \
-                "$FILE"
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              s = f.read()
+
+          if "pluginManagement" not in s:
+              s = """pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          """ + s
+
+          if "import org.gradle.api.initialization.resolve.RepositoriesMode" not in s:
+              s = "import org.gradle.api.initialization.resolve.RepositoriesMode\n" + s
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(s)
+          PY
+          fi
+
+      - name: Fix known Android source files
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="${{ steps.android_project.outputs.project }}"
+
+          echo "===== Searching Java files ====="
+          find "$PROJECT/app/src/main/java" -type f -name "*.java" -print || true
+
+          echo "===== Fix Bundle import ====="
+
+          while IFS= read -r FILE; do
+            if grep -q "class Page5InjectorFragment" "$FILE"; then
+
+              if ! grep -q "import android.os.Bundle;" "$FILE"; then
+                sed -i '/^package /a import android.os.Bundle;' "$FILE"
+              fi
+
             fi
+          done < <(find "$PROJECT/app/src/main/java" -type f -name "*.java")
+
+          echo "===== Fix XML hintTextColor ====="
+
+          while IFS= read -r FILE; do
+            sed -i 's/android:hintTextColor=/android:textColorHint=/g' "$FILE"
+          done < <(find "$PROJECT/app/src/main/res" -type f -name "*.xml")
+
+          echo "===== Fix XML ampersand ====="
+
+          while IFS= read -r FILE; do
+            sed -i 's/ & / \&amp; /g' "$FILE"
+          done < <(find "$PROJECT/app/src/main/res" -type f -name "*.xml")
+
+          echo "===== Fix nav_colors.xml location ====="
+
+          if [ -f "$PROJECT/app/src/main/res/values/nav_colors.xml" ]; then
+            mkdir -p "$PROJECT/app/src/main/res/color"
+
+            mv \
+              "$PROJECT/app/src/main/res/values/nav_colors.xml" \
+              "$PROJECT/app/src/main/res/color/nav_colors.xml"
+
+            echo "Moved nav_colors.xml to res/color/"
           fi
 
-          # Move selector resource if incorrectly placed
-          mkdir -p app/src/main/res/color
-
-          if [ -f app/src/main/res/values/nav_colors.xml ]; then
-            if grep -q "state_checked" \
-              app/src/main/res/values/nav_colors.xml; then
-              mv \
-                app/src/main/res/values/nav_colors.xml \
-                app/src/main/res/color/nav_colors.xml
-            fi
-          fi
-
-          # Old invalid attribute
-          find app/src/main/res \
-            -type f \
-            -name "*.xml" \
-            -print0 |
-          xargs -0 sed -i \
-            's/android:hintTextColor=/android:textColorHint=/g' \
-            2>/dev/null || true
-
-      - name: Fix Java 17 Compatibility
-        working-directory: ${{ steps.android.outputs.project }}
+      - name: Fix Java 17 compatibility
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "CHECKING JAVA COMPATIBILITY"
-          echo "======================================"
+          PROJECT="${{ steps.android_project.outputs.project }}"
 
-          # Remove obsolete javax.xml.bind DatatypeConverter usage
-          # when present in Supabase.java.
-          FILE="app/src/main/java/com/sadee/optimizer/Supabase.java"
+          echo "===== Fix javax.xml.bind ====="
 
-          if [ -f "$FILE" ]; then
+          while IFS= read -r FILE; do
+
             if grep -q "javax.xml.bind.DatatypeConverter" "$FILE"; then
 
-              echo "Replacing javax.xml.bind date parser..."
+              python3 - "$FILE" <<'PY'
+          import sys
+          import re
 
-              python3 - <<'PY'
-from pathlib import Path
+          path = sys.argv[1]
 
-p = Path("app/src/main/java/com/sadee/optimizer/Supabase.java")
-s = p.read_text()
+          with open(path, "r", encoding="utf-8") as f:
+              s = f.read()
 
-old = """try { return javax.xml.bind.DatatypeConverter.parseDateTime(s).getTimeInMillis(); } catch (Exception e) {}"""
+          old = r"javax\.xml\.bind\.DatatypeConverter\.parseDateTime\(([^)]*)\)\.getTimeInMillis\(\)"
 
-new = """try {
-    String v = s;
-    if (v.endsWith("Z")) v = v.substring(0, v.length() - 1) + "+00:00";
-    return java.time.OffsetDateTime.parse(v).toInstant().toEpochMilli();
-} catch (Exception e) {}"""
+          def repl(match):
+              value = match.group(1)
+              return (
+                  "java.time.OffsetDateTime.parse("
+                  + value
+                  + ").toInstant().toEpochMilli()"
+              )
 
-if old in s:
-    s = s.replace(old, new)
-    p.write_text(s)
-PY
+          s = re.sub(old, repl, s)
 
-            fi
-          fi
-
-          # MainActivity getCodeCache compatibility
-          MAIN="app/src/main/java/com/sadee/optimizer/MainActivity.java"
-
-          if [ -f "$MAIN" ]; then
-
-            if grep -q "getCodeCache()" "$MAIN"; then
-
-              echo "Replacing getCodeCache() with cache directory..."
-
-              sed -i \
-                's/getCodeCache()/getCacheDir()/g' \
-                "$MAIN"
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(s)
+          PY
 
             fi
-          fi
 
-      - name: Check Project
-        working-directory: ${{ steps.android.outputs.project }}
+          done < <(find "$PROJECT/app/src/main/java" -type f -name "*.java")
+
+          echo "===== Fix getCodeCache usage ====="
+
+          while IFS= read -r FILE; do
+
+            if grep -q "getCodeCache()" "$FILE"; then
+              sed -i 's/getCodeCache()/getCacheDir()/g' "$FILE"
+            fi
+
+          done < <(find "$PROJECT/app/src/main/java" -type f -name "*.java")
+
+      - name: Verify Android project
         shell: bash
         run: |
           set -e
 
-          echo "JAVA:"
+          PROJECT="${{ steps.android_project.outputs.project }}"
+
+          echo "===== PROJECT ====="
+          echo "$PROJECT"
+
+          echo "===== SETTINGS ====="
+          cat "$PROJECT/settings.gradle" || true
+
+          echo "===== APP BUILD ====="
+          cat "$PROJECT/app/build.gradle" || true
+
+          echo "===== JAVA VERSION ====="
           java -version
 
-          echo ""
-          echo "GRADLE:"
-          gradle --version
-
-          echo ""
-          echo "JAVA FILES:"
-          find app/src/main/java \
-            -type f \
-            -name "*.java" \
-            | sort
-
-      - name: Clean
-        working-directory: ${{ steps.android.outputs.project }}
+      - name: Clean build
         shell: bash
         run: |
           set -e
-          gradle clean --no-daemon
+
+          PROJECT="${{ steps.android_project.outputs.project }}"
+
+          cd "$PROJECT"
+
+          gradle --version
+
+          gradle clean --stacktrace
 
       - name: Build APK
-        id: build
-        working-directory: ${{ steps.android.outputs.project }}
+        id: build_apk
         shell: bash
         run: |
           set +e
 
-          echo "======================================"
-          echo "BUILDING APK"
-          echo "======================================"
+          PROJECT="${{ steps.android_project.outputs.project }}"
+
+          cd "$PROJECT"
 
           gradle assembleDebug \
-            --no-daemon \
             --stacktrace \
             --info \
-            2>&1 | tee build.log
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
-          RESULT=${PIPESTATUS[0]}
+          STATUS=${PIPESTATUS[0]}
 
-          echo ""
-          echo "BUILD EXIT CODE: $RESULT"
+          echo "Build exit code: $STATUS"
 
-          if [ "$RESULT" != "0" ]; then
-
-            echo ""
-            echo "======================================"
-            echo "COMPILER ERRORS"
-            echo "======================================"
-
-            grep -n \
-              -A20 \
-              -B10 \
-              "error:" \
-              build.log \
-              | tail -400 || true
-
-            exit "$RESULT"
+          if [ "$STATUS" -ne 0 ]; then
+            echo "===== BUILD FAILED ====="
+            exit "$STATUS"
           fi
 
-          echo ""
-          echo "======================================"
-          echo "APK BUILD SUCCESS"
-          echo "======================================"
-
-      - name: Locate APK
+      - name: Find APK
+        id: find_apk
         if: success()
-        working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-          find app/build/outputs \
-            -type f \
-            -name "*.apk" \
-            -print \
-            -exec ls -lh {} \;
+          set -e
+
+          APK="$(find extracted -type f -name '*.apk' | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK"
+
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: SADEE-X-DIMA-APK
-          path: |
-            ${{ steps.android.outputs.project }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.find_apk.outputs.apk }}
           if-no-files-found: error
 
-      - name: Upload Build Log
+      - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: SADEE-X-DIMA-BUILD-LOG
-          path: |
-            ${{ steps.android.outputs.project }}/build.log
-          if-no-files-found: ignore
+          path: build.log
+          if-no-files-found: warn
 
       - name: Find Admin Dashboard
-        id: admin
+        id: find_admin
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "SEARCHING ADMIN DASHBOARD"
-          echo "======================================"
+          ADMIN_DIR=""
 
-          ADMIN=""
-
-          ADMIN=$(find extracted \
-            -type d \
-            -iname "admin-dashboard" \
-            | head -n 1 || true)
-
-          if [ -z "$ADMIN" ]; then
-            INDEX=$(find extracted \
-              -type f \
-              -iname "index.html" \
-              | head -n 1 || true)
-
-            if [ -z "$INDEX" ]; then
-              echo "ERROR: index.html / admin-dashboard not found."
-
-              find extracted \
-                -type f \
-                \( -name "*.html" -o -name "*.htm" \) \
-                | sort
-
-              exit 1
-            fi
-
-            ADMIN=$(dirname "$INDEX")
+          if [ -d "extracted/admin-dashboard" ]; then
+            ADMIN_DIR="extracted/admin-dashboard"
           fi
 
-          echo "ADMIN:"
-          echo "$ADMIN"
+          if [ -z "$ADMIN_DIR" ]; then
+            INDEX="$(find extracted -type f -name 'index.html' | head -n 1)"
 
-          echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
+            if [ -n "$INDEX" ]; then
+              ADMIN_DIR="$(dirname "$INDEX")"
+            fi
+          fi
 
-      - name: Prepare Admin
+          if [ -z "$ADMIN_DIR" ]; then
+            echo "No admin dashboard found."
+            echo "admin_found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Admin dashboard:"
+          echo "$ADMIN_DIR"
+
+          echo "admin_found=true" >> "$GITHUB_OUTPUT"
+          echo "admin_dir=$ADMIN_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Admin Dashboard
+        if: success() && steps.find_admin.outputs.admin_found == 'true'
         shell: bash
         run: |
           set -e
@@ -411,21 +375,17 @@ PY
           rm -rf public
           mkdir -p public
 
-          cp -R \
-            "${{ steps.admin.outputs.admin }}/." \
-            public/
+          cp -R "${{ steps.find_admin.outputs.admin_dir }}/." public/
 
-          touch public/.nojekyll
+          echo "===== ADMIN FILES ====="
+          find public -maxdepth 3 -type f | sort
 
-          echo "ADMIN FILES:"
-          find public -type f | sort
-
-      - name: Deploy Admin
-        if: success()
+      - name: Deploy Admin Dashboard
+        if: success() && steps.find_admin.outputs.admin_found == 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
           publish_dir: ./public
           force_orphan: true
-          enable_jekyll: false
+          commit_message: "Deploy SADEE X DIMA Admin Dashboard"
