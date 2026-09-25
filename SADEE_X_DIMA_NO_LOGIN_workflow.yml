@@ -1,0 +1,117 @@
+name: SADEE X DIMA - NO LOGIN ADMIN
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sadee-no-login-admin
+  cancel-in-progress: true
+
+jobs:
+  deploy-admin:
+    name: Extract ZIP & Deploy Admin
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find ZIP
+        id: zip
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE=$(find . \
+            -maxdepth 1 \
+            -type f \
+            -iname "*.zip" \
+            | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: ZIP file not found in repository root."
+            ls -la
+            exit 1
+          fi
+
+          echo "ZIP FOUND: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf extracted
+          mkdir -p extracted
+
+          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
+
+          echo "======================================"
+          echo "EXTRACTED FILES"
+          echo "======================================"
+
+          find extracted -maxdepth 8 -type f | sort
+
+      - name: Find Admin Dashboard
+        id: admin
+        shell: bash
+        run: |
+          set -e
+
+          ADMIN=$(find extracted \
+            -type d \
+            -name "admin-dashboard" \
+            | head -n 1)
+
+          if [ -z "$ADMIN" ]; then
+            INDEX=$(find extracted \
+              -type f \
+              -name "index.html" \
+              | head -n 1)
+
+            if [ -z "$INDEX" ]; then
+              echo "ERROR: admin-dashboard or index.html not found."
+              exit 1
+            fi
+
+            ADMIN=$(dirname "$INDEX")
+          fi
+
+          echo "ADMIN DASHBOARD: $ADMIN"
+          echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare GitHub Pages
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf public
+          mkdir -p public
+
+          cp -R \
+            "${{ steps.admin.outputs.admin }}/." \
+            public/
+
+          touch public/.nojekyll
+
+          echo "======================================"
+          echo "WEBSITE FILES"
+          echo "======================================"
+
+          find public -maxdepth 8 -type f | sort
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./public
+          force_orphan: true
+          enable_jekyll: false
