@@ -1,4 +1,4 @@
-name: SADEE X DIMA - FULL AUTO BUILD FIX
+name: SADEE X DIMA FINAL - BUILD APK + ADMIN
 
 on:
   push:
@@ -7,16 +7,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
 
 concurrency:
-  group: sadee-x-dima-build
+  group: sadee-x-dima-final
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Extract + Repair Dart + Repair Android + Build APK
+    name: Build Android + Deploy Admin
     runs-on: ubuntu-latest
 
     steps:
@@ -25,25 +24,26 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.35.7"
-          channel: stable
-          cache: true
-
-      - name: Find ZIP
+      - name: Find Uploaded ZIP
+        id: zip
         shell: bash
         run: |
           set -e
+          echo "========================================"
+          echo "SEARCHING FOR SADEE X DIMA ZIP"
+          echo "========================================"
+
           ZIP_FILE="$(find . -type f -iname '*.zip' ! -path './.git/*' | sort | head -n 1)"
+
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: ZIP NOT FOUND"
-            find . -maxdepth 4 -type f ! -path './.git/*' | sort
+            echo "Upload SADEE_X_DIMA_GREEN_GAMING_FINAL.zip to repository root."
+            find . -maxdepth 3 -type f ! -path './.git/*' | sort
             exit 1
           fi
-          echo "ZIP FOUND: $ZIP_FILE"
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+          echo "ZIP: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Extract ZIP
         shell: bash
@@ -51,462 +51,172 @@ jobs:
           set -e
           rm -rf extracted
           mkdir -p extracted
-          unzip -oq "$ZIP_FILE" -d extracted
-          echo "ZIP extracted."
+          unzip -oq "${{ steps.zip.outputs.zip_file }}" -d extracted
 
-      - name: Detect Flutter Project
+          echo "EXTRACTED FILES:"
+          find extracted -maxdepth 5 -type f | sort | head -500
+
+      - name: Locate Android Project
+        id: android
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=""
-          PUBSPEC="$(find extracted -type f -name 'pubspec.yaml' | sort | head -n 1)"
+          SETTINGS="$(find extracted -type f \( \
+            -name settings.gradle \
+            -o -name settings.gradle.kts \
+          \) | sort | head -n 1)"
 
-          if [ -n "$PUBSPEC" ]; then
-            PROJECT_DIR="$(dirname "$PUBSPEC")"
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            V6_FILE="$(find extracted -type f -name 'SADEE_X_DIMA_USER_HOME_V6.dart' | head -n 1)"
-            if [ -n "$V6_FILE" ]; then
-              PROJECT_DIR="$GITHUB_WORKSPACE/generated_project"
-              mkdir -p "$PROJECT_DIR"
-              cd "$PROJECT_DIR"
-              flutter create . \
-                --project-name sadee_x_dima_optimizer \
-                --platforms android
-            fi
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: No Flutter project or V6 file found."
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: settings.gradle not found."
             exit 1
           fi
 
-          PROJECT_DIR="$(realpath "$PROJECT_DIR")"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "PROJECT: $PROJECT_DIR"
+          PROJECT="$(dirname "$SETTINGS")"
 
-      - name: Install V6 UI
-        shell: bash
-        run: |
-          set -e
-
-          V6_FILE=""
-          if [ -f "$GITHUB_WORKSPACE/SADEE_X_DIMA_USER_HOME_V6.dart" ]; then
-            V6_FILE="$GITHUB_WORKSPACE/SADEE_X_DIMA_USER_HOME_V6.dart"
-          else
-            V6_FILE="$(find extracted -type f -name 'SADEE_X_DIMA_USER_HOME_V6.dart' | head -n 1)"
+          if [ ! -d "$PROJECT/app" ]; then
+            echo "ERROR: Android app directory not found."
+            exit 1
           fi
 
-          if [ -n "$V6_FILE" ] && [ -f "$V6_FILE" ]; then
-            mkdir -p "$PROJECT_DIR/lib/screens"
-            cp "$V6_FILE" "$PROJECT_DIR/lib/screens/user_home_v6.dart"
-            echo "V6 UI installed."
+          echo "PROJECT=$PROJECT"
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Configure Android Build
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: |
+          set -e
+
+          cat > gradle.properties <<'PROPS'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          PROPS
+
+          if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i -E \
+              's#gradle-[0-9.]+-(bin|all)\.zip#gradle-8.7-\1.zip#g' \
+              gradle/wrapper/gradle-wrapper.properties
           fi
 
-      - name: Repair V6 Dart Source
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Verify Original App
+        working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set -e
 
-          python3 - <<'PY'
-          from pathlib import Path
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/java/com/sadee/optimizer/MainActivity.java
+          test -f app/src/main/java/com/sadee/optimizer/Supabase.java
+          test -f app/src/main/java/com/sadee/optimizer/DeviceInfo.java
+          test -f app/src/main/java/com/sadee/optimizer/Config.java
+          test -f app/src/main/res/drawable/sadee_logo.jpg
 
-          p = Path("lib/screens/user_home_v6.dart")
-          if not p.exists():
-              raise SystemExit("V6 source not found")
-
-          s = p.read_text(encoding="utf-8")
-
-          # Fix invalid Colors.white45 constants.
-          s = s.replace("Colors.white45", "Colors.white54")
-
-          # The file has an action method named _mode and a widget method
-          # also named _mode. Dart does not support overloading, so rename
-          # the widget builder to _modeCard.
-          s = s.replace(
-              "Widget _mode(String t,String s,IconData i,Color c,Future<void> Function() f)",
-              "Widget _modeCard(String t,String s,IconData i,Color c,Future<void> Function() f)"
-          )
-
-          # Replace only the three widget-builder calls.
-          s = s.replace(
-              "_mode('PERFORMANCE MODE'",
-              "_modeCard('PERFORMANCE MODE'"
-          )
-          s = s.replace(
-              "_mode('BALANCED MODE'",
-              "_modeCard('BALANCED MODE'"
-          )
-          s = s.replace(
-              "_mode('COOL DOWN'",
-              "_modeCard('COOL DOWN'"
-          )
-
-          # _quickButton requires Future<void> Function(), while _openTab
-          # returns void. Wrap those callbacks in async functions.
-          s = s.replace(
-              "red,()=>_openTab(3))",
-              "red,() async { _openTab(3); })"
-          )
-          s = s.replace(
-              "cyan,()=>_openTab(4))",
-              "cyan,() async { _openTab(4); })"
-          )
-
-          p.write_text(s, encoding="utf-8")
-          print("V6 Dart source repaired.")
-          PY
-
-      - name: Add Required Flutter Dependency
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-          flutter pub add path_provider:^2.1.5
-
-      - name: Create Missing Services
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-
-          mkdir -p lib/services
-
-          # Create KeyService only when the project does not already provide it.
-          if [ ! -f lib/services/key_service.dart ]; then
-            cat > lib/services/key_service.dart <<'DART'
-          class KeyService {
-            const KeyService();
-
-            Future<bool> verify(String key) async {
-              return key.trim().isNotEmpty;
-            }
-          }
-          DART
-          fi
-
-          # Create a safe build-compatible OptimizerService only when the
-          # uploaded project does not already contain the real service.
-          if [ ! -f lib/services/optimizer_service.dart ]; then
-            cat > lib/services/optimizer_service.dart <<'DART'
-          import 'dart:async';
-          import 'dart:io';
-
-          import 'package:flutter/services.dart';
-          import 'package:path_provider/path_provider.dart';
-
-          class OptimizerService {
-            static const MethodChannel _channel =
-                MethodChannel('sadee_x_dima/device');
-
-            final StreamController<Map<String, dynamic>> _progress =
-                StreamController<Map<String, dynamic>>.broadcast();
-
-            Stream<Map<String, dynamic>> get progressStream =>
-                _progress.stream;
-
-            Future<Map<String, String>> getDeviceInfo() async {
-              try {
-                final r = await _channel.invokeMethod<dynamic>('deviceInfo');
-                if (r is Map) {
-                  return Map<String, String>.from(
-                    r.map((k, v) => MapEntry(k.toString(), v.toString())),
-                  );
-                }
-              } catch (_) {}
-              return {
-                'brand': Platform.operatingSystem,
-                'model': 'Android device',
-                'androidVersion': 'Android',
-                'sdkVersion': '--',
-                'ramPercentage': '--',
-                'usedRam': '--',
-                'totalRam': '--',
-              };
-            }
-
-            Future<Map<String, dynamic>> getSystemMetrics() async {
-              try {
-                final r = await _channel.invokeMethod<dynamic>('metrics');
-                if (r is Map) {
-                  return Map<String, dynamic>.from(r);
-                }
-              } catch (_) {}
-              return {
-                'cpuUsage': 0,
-                'batteryLevel': 0,
-                'batteryTempC': 0,
-                'storageUsed': 0,
-                'storageTotal': 0,
-                'networkType': '--',
-                'thermalName': 'NORMAL',
-                'refreshRateHz': 60,
-                'uptimeHours': 0,
-                'batteryHealth': '--',
-                'charging': false,
-              };
-            }
-
-            Future<int> getAppCacheBytes() async {
-              try {
-                final d = await getTemporaryDirectory();
-                return _directoryBytes(d);
-              } catch (_) {
-                return 0;
-              }
-            }
-
-            Future<int> clearAppCache() async {
-              int before = await getAppCacheBytes();
-              try {
-                final d = await getTemporaryDirectory();
-                if (d.existsSync()) {
-                  for (final e in d.listSync()) {
-                    try {
-                      e.deleteSync(recursive: true);
-                    } catch (_) {}
-                  }
-                }
-              } catch (_) {}
-              return before;
-            }
-
-            Future<void> trimMemory() async {
-              try {
-                await _channel.invokeMethod('trimMemory');
-              } catch (_) {}
-            }
-
-            Future<bool> hasAllFilesAccess() async => true;
-
-            Future<void> requestAllFilesAccess() async {
-              try {
-                await _channel.invokeMethod('requestAllFilesAccess');
-              } catch (_) {}
-            }
-
-            Future<Map<String, dynamic>> scanFiles(String category) async {
-              _progress.add({'progress': 20});
-              await Future<void>.delayed(const Duration(milliseconds: 80));
-              _progress.add({'progress': 70});
-              await Future<void>.delayed(const Duration(milliseconds: 80));
-              _progress.add({'progress': 100});
-
-              return {
-                'scannedFiles': 0,
-                'totalBytes': 0,
-                'files': <Map<String, dynamic>>[],
-                'category': category,
-              };
-            }
-
-            Future<void> cancelScan() async {}
-
-            Future<Map<String, dynamic>> deleteFiles(
-              List<String> paths,
-            ) async {
-              int deleted = 0;
-              int bytes = 0;
-
-              for (final path in paths) {
-                try {
-                  final f = File(path);
-                  if (f.existsSync()) {
-                    bytes += await f.length();
-                    await f.delete();
-                    deleted++;
-                  }
-                } catch (_) {}
-              }
-
-              return {'deleted': deleted, 'bytes': bytes};
-            }
-
-            Future<bool> isGameInstalled(String package) async {
-              try {
-                final r = await _channel.invokeMethod<dynamic>(
-                  'isPackageInstalled',
-                  {'package': package},
-                );
-                return r == true;
-              } catch (_) {
-                return false;
-              }
-            }
-
-            Future<bool> launchPackage(String package) async {
-              try {
-                final r = await _channel.invokeMethod<dynamic>(
-                  'launchPackage',
-                  {'package': package},
-                );
-                return r == true;
-              } catch (_) {
-                return false;
-              }
-            }
-
-            Future<int> _directoryBytes(Directory d) async {
-              int total = 0;
-              try {
-                if (!d.existsSync()) return 0;
-                for (final e in d.listSync(recursive: true)) {
-                  if (e is File) {
-                    try {
-                      total += await e.length();
-                    } catch (_) {}
-                  }
-                }
-              } catch (_) {}
-              return total;
-            }
-
-            String formatBytes(num bytes) {
-              if (bytes < 1024) return '${bytes.round()} B';
-              if (bytes < 1024 * 1024) {
-                return '${(bytes / 1024).toStringAsFixed(1)} KB';
-              }
-              if (bytes < 1024 * 1024 * 1024) {
-                return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-              }
-              return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
-            }
-
-            void dispose() {
-              _progress.close();
-            }
-          }
-          DART
-          fi
-
-      - name: Create Main Dart If Needed
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          if [ ! -f lib/main.dart ] && [ -f lib/screens/user_home_v6.dart ]; then
-            printf '%s\n' \
-              "import 'package:flutter/material.dart';" \
-              "import 'screens/user_home_v6.dart';" \
-              "" \
-              "void main() {" \
-              "  runApp(const SadeeDimaApp());" \
-              "}" \
-              "" \
-              "class SadeeDimaApp extends StatelessWidget {" \
-              "  const SadeeDimaApp({super.key});" \
-              "" \
-              "  @override" \
-              "  Widget build(BuildContext context) {" \
-              "    return MaterialApp(" \
-              "      debugShowCheckedModeBanner: false," \
-              "      title: 'SADEE X DIMA OPTIMIZER'," \
-              "      theme: ThemeData.dark(useMaterial3: true)," \
-              "      home: const UserHomeScreen()," \
-              "    );" \
-              "  }" \
-              "}" > lib/main.dart
-          fi
-
-      - name: Force Modern Android Project
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-          rm -rf android
-          flutter create . \
-            --project-name sadee_x_dima_optimizer \
-            --platforms android
-          echo "Modern Android project generated."
-
-      - name: Configure AndroidX
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          touch android/gradle.properties
-
-          grep -q '^android.useAndroidX=true$' android/gradle.properties \
-            || echo 'android.useAndroidX=true' >> android/gradle.properties
-
-          grep -q '^android.enableJetifier=true$' android/gradle.properties \
-            || echo 'android.enableJetifier=true' >> android/gradle.properties
-
-      - name: Verify Source Before Build
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-
-          echo "Checking repaired source..."
-
-          ! grep -n "Colors.white45" lib/screens/user_home_v6.dart || true
-          ! grep -n "Widget _mode(" lib/screens/user_home_v6.dart || true
-
-          test -f lib/services/key_service.dart
-          test -f lib/services/optimizer_service.dart
-          test -f android/app/src/main/AndroidManifest.xml
-
-          echo "Source checks passed."
-
-      - name: Flutter Clean
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter clean
-
-      - name: Flutter Pub Get
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter pub get
-
-      - name: Flutter Analyze
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          flutter analyze \
-            --no-fatal-infos \
-            --no-fatal-warnings \
-            || true
+          echo "Original app structure OK."
 
       - name: Build Release APK
-        working-directory: ${{ env.PROJECT_DIR }}
+        id: build
+        working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
-          set -e
-          flutter build apk \
-            --release \
-            --no-tree-shake-icons
+          set -o pipefail
 
-      - name: Prepare APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
+          echo "========================================"
+          echo "BUILDING SADEE X DIMA FINAL APK"
+          echo "========================================"
 
-          APK_FILE="$(find build -type f -name '*.apk' | head -n 1)"
+          gradle clean assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --info 2>&1 | tee build.log
 
-          if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK NOT FOUND"
-            exit 1
-          fi
-
-          mkdir -p "$GITHUB_WORKSPACE/final-apk"
-
-          cp "$APK_FILE" \
-            "$GITHUB_WORKSPACE/final-apk/SADEE-X-DIMA-OPTIMIZER.apk"
-
-          ls -lh "$GITHUB_WORKSPACE/final-apk/"
-
-      - name: Upload APK
+      - name: Upload Release APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-OPTIMIZER
-          path: final-apk/SADEE-X-DIMA-OPTIMIZER.apk
+          name: SADEE-X-DIMA-FINAL-APK
+          path: ${{ steps.android.outputs.project }}/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Build Success
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SADEE-X-DIMA-BUILD-LOG
+          path: ${{ steps.android.outputs.project }}/build.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Locate Admin Dashboard
+        id: admin
+        shell: bash
         run: |
-          echo "=========================================="
-          echo "SADEE X DIMA OPTIMIZER"
-          echo "BUILD SUCCESS"
-          echo "=========================================="
+          set -e
+
+          ADMIN="$(find extracted -type f \
+            -path '*/admin-dashboard/index.html' \
+            -print | sort | head -n 1)"
+
+          if [ -z "$ADMIN" ]; then
+            ADMIN_FILE="$(find extracted -type f \
+              -name index.html \
+              ! -path '*/node_modules/*' | sort | head -n 1)"
+
+            if [ -z "$ADMIN_FILE" ]; then
+              echo "ERROR: admin index.html not found."
+              exit 1
+            fi
+
+            ADMIN="$(dirname "$ADMIN_FILE")"
+          else
+            ADMIN="$(dirname "$ADMIN")"
+          fi
+
+          echo "ADMIN=$ADMIN"
+          echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare GitHub Pages
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf public
+          mkdir -p public
+
+          cp -R "${{ steps.admin.outputs.admin }}/." public/
+
+          touch public/.nojekyll
+
+          echo "ADMIN FILES:"
+          find public -maxdepth 2 -type f | sort
+
+      - name: Deploy Admin Dashboard
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./public
+          force_orphan: true
+          enable_jekyll: false
+          commit_message: "Deploy SADEE X DIMA Admin Dashboard"
+
+      - name: Build Complete
+        run: |
+          echo "========================================"
+          echo "SADEE X DIMA FINAL BUILD SUCCESS"
+          echo "APK -> Actions / Artifacts"
+          echo "ADMIN -> gh-pages"
+          echo "========================================"
