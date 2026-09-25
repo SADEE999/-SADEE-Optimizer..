@@ -28,11 +28,11 @@ jobs:
           set -e
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)
           if [ -z "$ZIP_FILE" ]; then
-            echo 'ERROR: Put the project ZIP in the repository root.'
-            ls -lah
+            echo 'ERROR: Put the generated SADEE_X_DIMA_FULL.zip in the repository root.'
+            ls -la
             exit 1
           fi
-          echo "ZIP FOUND: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE"
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Extract ZIP
@@ -48,14 +48,14 @@ jobs:
         shell: bash
         run: |
           set -e
-          PROJECT=$(find extracted -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -printf '%h\n' | head -n 1)
+          PROJECT=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -printf '%h\n' | head -n 1)
           if [ -z "$PROJECT" ]; then
-            echo 'ERROR: Android project not found inside ZIP.'
+            echo 'ERROR: Android project not found in ZIP.'
             find extracted -maxdepth 8 -type f | sort
             exit 1
           fi
-          echo "ANDROID PROJECT: $PROJECT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Android project: $PROJECT"
 
       - name: Setup Java 17
         uses: actions/setup-java@v5
@@ -68,48 +68,67 @@ jobs:
         with:
           gradle-version: '8.0'
 
-      - name: Prepare Android Build
+      - name: Repair Android Project
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set -e
           touch gradle.properties
-          grep -q '^android.useAndroidX=true$' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
-          grep -q '^android.enableJetifier=true$' gradle.properties || echo 'android.enableJetifier=true' >> gradle.properties
+          grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
+          grep -q '^android.enableJetifier=' gradle.properties || echo 'android.enableJetifier=true' >> gradle.properties
 
-          if [ -f settings.gradle ]; then
-            sed -i 's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' settings.gradle || true
-            sed -i 's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' settings.gradle || true
-          fi
-          if [ -f settings.gradle.kts ]; then
-            sed -i 's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' settings.gradle.kts || true
-            sed -i 's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' settings.gradle.kts || true
-          fi
+          # Fix old repository-mode settings when present.
+          for f in settings.gradle settings.gradle.kts; do
+            if [ -f "$f" ]; then
+              sed -i 's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' "$f" || true
+              sed -i 's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' "$f" || true
+            fi
+          done
 
-          # Known Java compatibility fixes for older ZIPs.
-          find app/src/main/java -type f -name '*.java' -print0 | xargs -0 sed -i 's/getCodeCache()/getCodeCacheDir()/g' || true
-          if [ -f app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java ]; then
-            grep -q '^import android.os.Bundle;' app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java || sed -i '/^package com\.sadee\.optimizer;/a import android.os.Bundle;' app/src/main/java/com/sadee/optimizer/Page5InjectorFragment.java
-          fi
-          mkdir -p app/src/main/res/color
+          # A selector belongs in res/color, not res/values.
           if [ -f app/src/main/res/values/nav_colors.xml ] && grep -q 'state_checked' app/src/main/res/values/nav_colors.xml; then
+            mkdir -p app/src/main/res/color
             mv app/src/main/res/values/nav_colors.xml app/src/main/res/color/nav_colors.xml
           fi
 
-          echo 'BUILD PREPARED'
-          java -version
-          gradle --version | head -20
+          # Repair common Java 17 JAXB usage from older source.
+          if [ -f app/src/main/java/com/sadee/optimizer/Supabase.java ]; then
+            sed -i 's/javax\.xml\.bind\.DatatypeConverter\.parseDateTime(s)\.getTimeInMillis()/java.time.Instant.parse(s).toEpochMilli()/g' app/src/main/java/com/sadee/optimizer/Supabase.java || true
+          fi
+
+          # Context#getCodeCache() is unnecessary for the safe cleaner; use cache only.
+          if [ -f app/src/main/java/com/sadee/optimizer/MainActivity.java ]; then
+            sed -i 's/clearCache(getCacheDir());[[:space:]]*clearCache(getCodeCache());/clearCache(getCacheDir());/g' app/src/main/java/com/sadee/optimizer/MainActivity.java || true
+          fi
+
+          # Fix missing Bundle imports in Fragment files.
+          find app/src/main/java -type f -name '*.java' -print0 | while IFS= read -r -d '' f; do
+            if grep -q 'Bundle' "$f" && ! grep -q '^import android.os.Bundle;' "$f" && grep -q '^package ' "$f"; then
+              sed -i '/^package .*;/a import android.os.Bundle;' "$f"
+            fi
+          done
+
+          # XML ampersand repair for old layouts.
+          find app/src/main/res -type f -name '*.xml' -print0 | while IFS= read -r -d '' f; do
+            sed -i 's/ & / &amp; /g' "$f" || true
+          done
+
+      - name: Clean Project
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: gradle clean --no-daemon
 
       - name: Build APK
+        id: build
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set +e
-          gradle clean assembleDebug --no-daemon --stacktrace --info 2>&1 | tee build.log
+          gradle assembleDebug --no-daemon --stacktrace --info 2>&1 | tee build.log
           RESULT=${PIPESTATUS[0]}
           if [ "$RESULT" != '0' ]; then
-            echo '========== COMPILER ERRORS =========='
-            grep -n -A20 -B10 -E 'error:|cannot find symbol|symbol:|location:' build.log | tail -400 || true
+            echo '===== COMPILER ERRORS ====='
+            grep -n -A18 -B8 'cannot find symbol\|package javax.xml.bind\|error:' build.log | tail -300 || true
             exit "$RESULT"
           fi
           echo 'APK BUILD SUCCESS'
@@ -118,7 +137,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-REAL-RELEASE
+          name: SADEE-X-DIMA-APK
           path: ${{ steps.android.outputs.project }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
@@ -135,14 +154,14 @@ jobs:
         shell: bash
         run: |
           set -e
-          ADMIN=$(find extracted -type d -name 'admin-dashboard' | head -n 1)
+          ADMIN=$(find extracted -type d -name admin-dashboard | head -n 1)
           if [ -z "$ADMIN" ]; then
-            INDEX=$(find extracted -type f -name 'index.html' | head -n 1)
+            INDEX=$(find extracted -type f -name index.html | head -n 1)
             [ -n "$INDEX" ] || { echo 'ERROR: admin-dashboard/index.html not found.'; exit 1; }
             ADMIN=$(dirname "$INDEX")
           fi
-          echo "ADMIN DASHBOARD: $ADMIN"
           echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
+          echo "Admin: $ADMIN"
 
       - name: Prepare Admin Dashboard
         shell: bash
@@ -152,9 +171,8 @@ jobs:
           mkdir -p public
           cp -R "${{ steps.admin.outputs.admin }}/." public/
           touch public/.nojekyll
-          echo 'ADMIN READY'
 
-      - name: Deploy Admin
+      - name: Deploy Admin to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
