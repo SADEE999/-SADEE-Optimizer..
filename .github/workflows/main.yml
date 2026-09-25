@@ -15,10 +15,6 @@ concurrency:
 
 jobs:
 
-  # =========================================================
-  # ANDROID APK
-  # =========================================================
-
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
@@ -28,7 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find V3 ZIP
+      - name: Find ZIP
         id: zip
         shell: bash
         run: |
@@ -48,13 +44,10 @@ jobs:
             exit 1
           fi
 
-          echo "ZIP:"
-          echo "$ZIP_FILE"
-
+          echo "Using: $ZIP_FILE"
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Extract ZIP
-        shell: bash
         run: |
           set -e
 
@@ -62,10 +55,6 @@ jobs:
           mkdir -p extracted
 
           unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
-
-          echo "================================"
-          echo "EXTRACTED PROJECT"
-          echo "================================"
 
           find extracted -maxdepth 8 -type f | sort
 
@@ -82,13 +71,11 @@ jobs:
             | head -n 1)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: Android project not found"
+            echo "ERROR: settings.gradle not found"
             exit 1
           fi
 
-          echo "ANDROID PROJECT:"
-          echo "$PROJECT"
-
+          echo "Android project: $PROJECT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
       - name: Setup Java 17
@@ -116,14 +103,13 @@ jobs:
 
           cat gradle.properties
 
-      - name: Fix Gradle Repository Mode
+      - name: Fix Repository Mode
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set -e
 
           if [ -f settings.gradle ]; then
-
             sed -i \
               's/RepositoriesMode\.FAIL_ON_PROJECT_REPOS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle || true
@@ -131,30 +117,15 @@ jobs:
             sed -i \
               's/RepositoriesMode\.PREFER_SETTINGS/RepositoriesMode.PREFER_PROJECT/g' \
               settings.gradle || true
-
           fi
 
           cat settings.gradle
 
-      - name: Check Resource Files
-        working-directory: ${{ steps.android.outputs.project }}
-        shell: bash
-        run: |
-          echo "Checking Android resources..."
-
-          find app/src/main/res -type f -name "*.xml" | sort
-
-          echo "Resource check complete."
-
-      - name: Build Debug APK
+      - name: Build APK
         working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set +e
-
-          echo "================================"
-          echo "BUILDING APK"
-          echo "================================"
 
           gradle \
             clean \
@@ -167,9 +138,7 @@ jobs:
           RESULT=${PIPESTATUS[0]}
 
           echo ""
-          echo "================================"
-          echo "ERROR SUMMARY"
-          echo "================================"
+          echo "========== ERROR SUMMARY =========="
 
           grep -E \
             "FAILURE:|error:|Error:|Caused by:|Execution failed|AAPT|resource|Manifest" \
@@ -177,8 +146,7 @@ jobs:
             | tail -200 || true
 
           echo ""
-          echo "GRADLE EXIT CODE:"
-          echo "$RESULT"
+          echo "Gradle exit code: $RESULT"
 
           exit "$RESULT"
 
@@ -201,12 +169,8 @@ jobs:
           if-no-files-found: error
 
 
-  # =========================================================
-  # ADMIN DASHBOARD
-  # =========================================================
-
   deploy-admin:
-    name: Build & Publish Admin Dashboard
+    name: Deploy Admin Dashboard
     runs-on: ubuntu-latest
 
     steps:
@@ -214,7 +178,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find V3 ZIP
+      - name: Find ZIP
         id: zip
         shell: bash
         run: |
@@ -256,27 +220,23 @@ jobs:
             | head -n 1)
 
           if [ -z "$ADMIN" ]; then
-
             INDEX=$(find extracted \
               -type f \
               -name "index.html" \
               | head -n 1)
 
             if [ -z "$INDEX" ]; then
-              echo "ERROR: Admin dashboard not found"
+              echo "ERROR: index.html not found"
               exit 1
             fi
 
             ADMIN=$(dirname "$INDEX")
           fi
 
-          echo "ADMIN:"
-          echo "$ADMIN"
-
+          echo "Admin: $ADMIN"
           echo "admin=$ADMIN" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Website
-        shell: bash
         run: |
           set -e
 
@@ -288,12 +248,6 @@ jobs:
             public/
 
           touch public/.nojekyll
-
-          echo "================================"
-          echo "ADMIN FILES"
-          echo "================================"
-
-          find public -maxdepth 8 -type f | sort
 
       - name: Publish GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
