@@ -22,43 +22,29 @@ jobs:
 
     steps:
 
-      # --------------------------------------------------
-      # CHECKOUT
-      # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      # --------------------------------------------------
+      # ==============================
       # JAVA
-      # --------------------------------------------------
+      # ==============================
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
           cache: gradle
 
-      # --------------------------------------------------
+      # ==============================
       # ANDROID SDK
-      # IMPORTANT:
-      # Do NOT use setup-android packages:
-      # multiline package bug can happen.
-      # --------------------------------------------------
+      # ==============================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # --------------------------------------------------
-      # INSTALL ANDROID SDK PACKAGES
-      # Each package is passed separately.
-      # --------------------------------------------------
-      - name: Install Android SDK packages
+      - name: Install Android SDK
         shell: bash
         run: |
           set -e
-
-          echo "ANDROID_HOME=$ANDROID_HOME"
 
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
@@ -69,49 +55,54 @@ jobs:
           echo "Using sdkmanager:"
           "$SDKMANAGER" --version
 
-          echo "Accepting Android SDK licenses..."
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          yes | "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --licenses >/dev/null || true
 
-          echo "Installing platform-tools..."
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platform-tools"
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            "platform-tools"
 
-          echo "Installing Android 35 platform..."
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-35"
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            "platforms;android-35"
 
-          echo "Installing Build Tools 35..."
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "build-tools;35.0.0"
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            "build-tools;35.0.0"
 
-          echo "Android SDK installation completed."
+          echo "Android SDK ready."
 
-      # --------------------------------------------------
-      # FIND PROJECT ZIP
-      # --------------------------------------------------
+      # ==============================
+      # FIND ZIP
+      # ==============================
       - name: Find project ZIP
         id: find_zip
         shell: bash
         run: |
           set -e
 
-          echo "Searching for project ZIP..."
-
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" \
+          ZIP_FILE=$(find . \
+            -maxdepth 2 \
+            -type f \
+            -iname "*.zip" \
             ! -path "./.git/*" \
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found in repository."
+            echo "ERROR: No project ZIP found."
             exit 1
           fi
 
-          echo "Found ZIP:"
+          echo "ZIP:"
           echo "$ZIP_FILE"
 
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-      # --------------------------------------------------
-      # EXTRACT PROJECT
-      # --------------------------------------------------
-      - name: Extract project ZIP
+      # ==============================
+      # EXTRACT
+      # ==============================
+      - name: Extract project
         shell: bash
         run: |
           set -e
@@ -119,109 +110,73 @@ jobs:
           rm -rf extracted
           mkdir -p extracted
 
-          unzip -q "${{ steps.find_zip.outputs.zip_file }}" -d extracted
+          unzip -q \
+            "${{ steps.find_zip.outputs.zip_file }}" \
+            -d extracted
 
-          echo "Extracted files:"
-          find extracted -maxdepth 3 -type f | head -100
-
-      # --------------------------------------------------
+      # ==============================
       # FIND ANDROID PROJECT
-      # --------------------------------------------------
+      # ==============================
       - name: Find Android project
-        id: find_project
+        id: project
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=""
-
-          SETTINGS_FILE=$(find extracted \
+          SETTINGS=$(find extracted \
             -type f \
             \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
             | head -n 1)
 
-          if [ -n "$SETTINGS_FILE" ]; then
-            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          fi
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: settings.gradle not found."
 
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android project not found."
-            echo "Searching extracted directory:"
-            find extracted -maxdepth 5 -type f | head -200
+            find extracted \
+              -maxdepth 5 \
+              -type f \
+              | head -100
+
             exit 1
           fi
 
-          echo "Android project found:"
+          PROJECT_DIR=$(dirname "$SETTINGS")
+
+          echo "Android project:"
           echo "$PROJECT_DIR"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-      # --------------------------------------------------
-      # MOVE INTO PROJECT
-      # --------------------------------------------------
-      - name: Prepare Android project
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT="${{ steps.find_project.outputs.project_dir }}"
-
-          echo "Project:"
-          echo "$PROJECT"
-
-          cd "$PROJECT"
-
-          echo "Project files:"
-          ls -la
-
-          echo "project.gradle files:"
-          find . -maxdepth 2 -type f \
-            \( -name "build.gradle" -o -name "build.gradle.kts" \) \
-            -print
-
-      # --------------------------------------------------
-      # INSTALL GRADLE IF WRAPPER IS MISSING
-      # --------------------------------------------------
+      # ==============================
+      # GRADLE
+      # ==============================
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: "8.7"
 
-      # --------------------------------------------------
-      # CREATE GRADLE WRAPPER IF NEEDED
-      # --------------------------------------------------
-      - name: Prepare Gradle wrapper
+      - name: Prepare Gradle
         shell: bash
         run: |
           set -e
 
-          cd "${{ steps.find_project.outputs.project_dir }}"
+          cd "${{ steps.project.outputs.project_dir }}"
 
           if [ -f "./gradlew" ]; then
-            echo "Gradle wrapper already exists."
-
             chmod +x ./gradlew
-
           else
-            echo "Gradle wrapper not found."
-            echo "Creating Gradle 8.7 wrapper..."
-
             gradle wrapper --gradle-version 8.7
-
             chmod +x ./gradlew
           fi
 
           ./gradlew --version
 
-      # --------------------------------------------------
+      # ==============================
       # GRADLE PROPERTIES
-      # --------------------------------------------------
+      # ==============================
       - name: Configure Gradle
         shell: bash
         run: |
-          set -e
-
-          cd "${{ steps.find_project.outputs.project_dir }}"
+          cd "${{ steps.project.outputs.project_dir }}"
 
           cat > gradle.properties <<'EOF'
           org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
@@ -232,60 +187,59 @@ jobs:
           android.enableJetifier=true
           EOF
 
-          echo "gradle.properties created."
-
-      # --------------------------------------------------
+      # ==============================
       # CLEAN
-      # --------------------------------------------------
-      - name: Gradle clean
+      # ==============================
+      - name: Clean project
         shell: bash
         run: |
           set -e
 
-          cd "${{ steps.find_project.outputs.project_dir }}"
+          cd "${{ steps.project.outputs.project_dir }}"
 
-          ./gradlew clean --no-daemon --stacktrace
+          ./gradlew clean \
+            --no-daemon \
+            --stacktrace
 
-      # --------------------------------------------------
-      # BUILD RELEASE APK
-      # --------------------------------------------------
+      # ==============================
+      # BUILD
+      # ==============================
       - name: Build Release APK
         shell: bash
         run: |
           set -e
 
-          cd "${{ steps.find_project.outputs.project_dir }}"
-
-          echo "Starting release build..."
+          cd "${{ steps.project.outputs.project_dir }}"
 
           ./gradlew assembleRelease \
             --no-daemon \
-            --stacktrace \
-            --info
+            --stacktrace
 
-      # --------------------------------------------------
+      # ==============================
       # FIND APK
-      # --------------------------------------------------
-      - name: Find generated APK
-        id: find_apk
+      # ==============================
+      - name: Find APK
+        id: apk
         shell: bash
         run: |
           set -e
 
-          PROJECT="${{ steps.find_project.outputs.project_dir }}"
+          PROJECT="${{ steps.project.outputs.project_dir }}"
 
           APK=$(find "$PROJECT" \
             -type f \
             -name "*.apk" \
             -path "*/build/outputs/*" \
-            | grep -i "release" \
+            | grep -i release \
             | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "Release APK not found."
+            echo "ERROR: Release APK not found."
 
-            echo "All APK files:"
-            find "$PROJECT" -type f -name "*.apk" -print || true
+            find "$PROJECT" \
+              -type f \
+              -name "*.apk" \
+              -print || true
 
             exit 1
           fi
@@ -295,35 +249,35 @@ jobs:
 
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
 
-      # --------------------------------------------------
-      # INSTALL BUILD TOOLS
-      # --------------------------------------------------
-      - name: Locate Android build tools
-        id: build_tools
+      # ==============================
+      # BUILD TOOLS
+      # ==============================
+      - name: Find Build Tools
+        id: tools
         shell: bash
         run: |
           set -e
 
           BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" \
-            -maxdepth 1 \
             -mindepth 1 \
+            -maxdepth 1 \
             -type d \
             | sort -V \
             | tail -n 1)
 
           if [ -z "$BUILD_TOOLS" ]; then
-            echo "ERROR: Android build-tools not found."
+            echo "ERROR: Build tools not found."
             exit 1
           fi
 
-          echo "Using:"
+          echo "Build tools:"
           echo "$BUILD_TOOLS"
 
           echo "build_tools=$BUILD_TOOLS" >> "$GITHUB_OUTPUT"
 
-      # --------------------------------------------------
-      # CREATE TEMPORARY SIGNING KEY
-      # --------------------------------------------------
+      # ==============================
+      # SIGNING KEY
+      # ==============================
       - name: Create signing key
         shell: bash
         run: |
@@ -343,37 +297,31 @@ jobs:
             -keypass sadee123 \
             -dname "CN=SADEE X DIMA, OU=SADEE, O=SADEE X DIMA, L=Colombo, ST=Western, C=LK"
 
-          echo "Signing key created."
-
-      # --------------------------------------------------
+      # ==============================
       # SIGN APK
-      # --------------------------------------------------
+      # ==============================
       - name: Sign APK
         shell: bash
         run: |
           set -e
 
-          APK="${{ steps.find_apk.outputs.apk }}"
-          BUILD_TOOLS="${{ steps.build_tools.outputs.build_tools }}"
+          APK="${{ steps.apk.outputs.apk }}"
+          BUILD_TOOLS="${{ steps.tools.outputs.build_tools }}"
 
           mkdir -p signed
 
           cp "$APK" signed/SADEE_X_DIMA_OPTIMIZER.apk
-
-          echo "Aligning APK..."
 
           "$BUILD_TOOLS/zipalign" \
             -f \
             -v \
             4 \
             signed/SADEE_X_DIMA_OPTIMIZER.apk \
-            signed/SADEE_X_DIMA_OPTIMIZER_ALIGNED.apk
+            signed/aligned.apk
 
           mv \
-            signed/SADEE_X_DIMA_OPTIMIZER_ALIGNED.apk \
+            signed/aligned.apk \
             signed/SADEE_X_DIMA_OPTIMIZER.apk
-
-          echo "Signing APK..."
 
           "$BUILD_TOOLS/apksigner" sign \
             --ks signing/release.keystore \
@@ -382,40 +330,37 @@ jobs:
             --key-pass pass:sadee123 \
             signed/SADEE_X_DIMA_OPTIMIZER.apk
 
-          echo "APK signed successfully."
-
-      # --------------------------------------------------
-      # VERIFY APK SIGNATURE
-      # --------------------------------------------------
+      # ==============================
+      # VERIFY
+      # ==============================
       - name: Verify APK
         shell: bash
         run: |
           set -e
 
-          BUILD_TOOLS="${{ steps.build_tools.outputs.build_tools }}"
+          BUILD_TOOLS="${{ steps.tools.outputs.build_tools }}"
 
           "$BUILD_TOOLS/apksigner" verify \
             --verbose \
             signed/SADEE_X_DIMA_OPTIMIZER.apk
 
-          echo "APK signature verified."
+          echo "APK verification successful."
 
-      # --------------------------------------------------
+      # ==============================
       # APK INFO
-      # --------------------------------------------------
-      - name: Show APK information
+      # ==============================
+      - name: APK information
         shell: bash
         run: |
-          set -e
-
           ls -lh signed/SADEE_X_DIMA_OPTIMIZER.apk
-
           sha256sum signed/SADEE_X_DIMA_OPTIMIZER.apk
 
-      # --------------------------------------------------
-      # UPLOAD APK
-      # --------------------------------------------------
-      - name: Upload APK artifact
+      # ==============================
+      # UPLOAD ONLY APK
+      # IMPORTANT:
+      # No **/build/** glob here.
+      # ==============================
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SADEE-X-DIMA-OPTIMIZER-APK
@@ -423,29 +368,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # --------------------------------------------------
-      # UPLOAD BUILD REPORTS
-      # --------------------------------------------------
-      - name: Upload build reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SADEE-X-DIMA-BUILD-REPORTS
-          path: |
-            ${{ steps.find_project.outputs.project_dir }}/**/build/reports/**
-            ${{ steps.find_project.outputs.project_dir }}/**/build/outputs/logs/**
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # --------------------------------------------------
+      # ==============================
       # ADMIN DASHBOARD
-      # --------------------------------------------------
+      # ==============================
       - name: Prepare admin dashboard
         shell: bash
         run: |
           set -e
 
-          PROJECT="${{ steps.find_project.outputs.project_dir }}"
+          PROJECT="${{ steps.project.outputs.project_dir }}"
 
           ADMIN=$(find "$PROJECT" \
             -type f \
@@ -457,7 +388,7 @@ jobs:
             exit 0
           fi
 
-          echo "Admin dashboard found:"
+          echo "Admin dashboard:"
           echo "$ADMIN"
 
           rm -rf public
@@ -467,13 +398,11 @@ jobs:
 
           cp -r "$ADMIN_DIR"/* public/
 
-          echo "Admin dashboard prepared."
-
-      # --------------------------------------------------
-      # DEPLOY ADMIN DASHBOARD
-      # --------------------------------------------------
+      # ==============================
+      # DEPLOY ADMIN
+      # ==============================
       - name: Deploy admin dashboard
-        if: success()
+        if: success() && hashFiles('public/index.html') != ''
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -482,33 +411,19 @@ jobs:
           force_orphan: true
           keep_files: false
 
-      # --------------------------------------------------
-      # SUMMARY
-      # --------------------------------------------------
-      - name: Build summary
-        if: always()
+      # ==============================
+      # FINAL
+      # ==============================
+      - name: Build completed
+        if: success()
         shell: bash
         run: |
           echo ""
-          echo "=============================================="
-          echo "       SADEE X DIMA BUILD SUMMARY"
-          echo "=============================================="
+          echo "========================================"
+          echo " SADEE X DIMA BUILD SUCCESS"
+          echo "========================================"
           echo ""
-
-          if [ -f "signed/SADEE_X_DIMA_OPTIMIZER.apk" ]; then
-            echo "APK: BUILD SUCCESS"
-            ls -lh signed/SADEE_X_DIMA_OPTIMIZER.apk
-          else
-            echo "APK: NOT FOUND"
-          fi
-
+          echo "APK:"
+          ls -lh signed/SADEE_X_DIMA_OPTIMIZER.apk
           echo ""
-          echo "Android SDK:"
-          sdkmanager --version || true
-
-          echo ""
-          echo "Java:"
-          java -version || true
-
-          echo ""
-          echo "=============================================="
+          echo "Build completed successfully."
