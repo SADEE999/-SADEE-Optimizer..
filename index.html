@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#05080a">
+<title>SADEE X DIMA • ADMIN</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{
+ --bg:#05080a;--panel:#0c1216;--panel2:#10171c;--line:#1b3037;
+ --green:#00f59a;--cyan:#12dfff;--purple:#b56cff;--yellow:#ffc84d;
+ --red:#ff5268;--text:#f3fbfa;--muted:#77858a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Arial,sans-serif}
+body{min-height:100vh}
+button,input{font:inherit}
+button{cursor:pointer}
+.app{max-width:760px;margin:auto;min-height:100vh;padding-bottom:88px}
+header{position:sticky;top:0;z-index:20;padding:20px 18px 14px;background:rgba(5,8,10,.94);backdrop-filter:blur(14px);border-bottom:1px solid #10242a}
+.brand{display:flex;align-items:center;justify-content:space-between}
+.brand h1{margin:0;font-size:24px;letter-spacing:1.8px;font-weight:950}
+.brand h1 span{color:var(--green)}
+.brand small{display:block;margin-top:5px;color:var(--cyan);font-size:10px;letter-spacing:3px}
+.refresh{width:42px;height:42px;border:1px solid var(--line);border-radius:14px;background:#0b1115;color:var(--cyan);font-size:23px}
+main{padding:10px 14px 24px}
+.page{display:none}.page.active{display:block}
+.card{background:linear-gradient(145deg,var(--panel2),#090e12);border:1px solid var(--line);border-radius:22px;padding:17px;margin:12px 0;box-shadow:0 10px 35px #0007}
+.card h2,.card h3{margin:0 0 13px}
+.card h2{font-size:17px;letter-spacing:.7px}.card h3{font-size:14px}
+.online{display:flex;align-items:center;gap:13px;border-color:#00f59a44}
+.shield{width:44px;height:44px;border-radius:15px;display:grid;place-items:center;background:#00f59a18;color:var(--green);font-size:22px}
+.online b{color:var(--green);font-size:15px}.online p{margin:3px 0 0;color:var(--muted);font-size:12px}
+.dot{margin-left:auto;width:11px;height:11px;border-radius:50%;background:var(--green);box-shadow:0 0 15px var(--green)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat{min-height:112px;padding:16px;border-radius:20px;background:#0d1419;border:1px solid var(--line)}
+.stat .icon{font-size:21px}.stat .num{font-size:31px;font-weight:950;margin-top:10px}.stat .label{font-size:11px;font-weight:850;letter-spacing:1px;margin-top:4px}
+.green{color:var(--green)}.cyan{color:var(--cyan)}.purple{color:var(--purple)}.yellow{color:var(--yellow)}.red{color:var(--red)}.muted{color:var(--muted)}
+.generator{border-color:#b56cff55}
+.generator-title{display:flex;align-items:center;gap:9px;font-size:17px;font-weight:950}
+.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:13px}
+.plan{padding:14px 6px;border-radius:17px;border:1px solid #223038;background:#0a1014;color:#b9c4c7;font-weight:900}
+.plan strong{display:block;font-size:13px}.plan span{display:block;font-size:11px;margin-top:5px;color:#7c898d}
+.plan.selected{border-color:var(--purple);box-shadow:0 0 18px #b56cff25;color:var(--purple)}
+.generate{width:100%;margin-top:11px;border:0;border-radius:17px;padding:17px;background:var(--cyan);color:#001015;font-weight:950}
+.generated{margin-top:11px;padding:13px;border-radius:14px;background:#050b0d;border:1px solid var(--green);font-family:ui-monospace,monospace;font-size:16px;word-break:break-all}
+.copy{width:100%;margin-top:8px;padding:11px;border-radius:12px;border:1px solid #29424a;background:#0b1519;color:var(--green);font-weight:900}
+.overview{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.overview div{padding:13px;border:1px solid var(--line);border-radius:16px;background:#0b1115}
+.overview b{display:block;font-size:12px}.overview strong{display:block;margin-top:7px;font-size:16px}.overview small{color:var(--muted)}
+.recent-row{display:flex;align-items:center;gap:11px;padding:12px 0;border-bottom:1px solid #132329}
+.keyicon{width:36px;height:36px;border-radius:12px;background:#00dfff16;color:var(--cyan);display:grid;place-items:center;font-size:18px}
+.recent-row:last-child{border-bottom:0}
+.recent-row code{font-size:13px;font-weight:900}.recent-row small{display:block;color:var(--muted);margin-top:3px}
+.badge{margin-left:auto;padding:6px 9px;border-radius:999px;font-size:9px;font-weight:950;border:1px solid}
+.badge.active{color:var(--green);border-color:#00f59a55;background:#00f59a10}
+.badge.unused{color:var(--cyan);border-color:#12dfff55;background:#12dfff10}
+.badge.paused{color:var(--yellow);border-color:#ffc84d55;background:#ffc84d10}
+.badge.expired{color:var(--red);border-color:#ff526855;background:#ff526810}
+.search{width:100%;padding:15px 16px;border-radius:17px;border:1px solid var(--line);background:#0b1116;color:white;outline:none}
+.search:focus{border-color:var(--cyan);box-shadow:0 0 0 3px #12dfff10}
+.filters{display:flex;gap:7px;overflow:auto;padding:10px 0 4px}
+.filter{white-space:nowrap;border:1px solid #304048;background:#0a1115;color:#aab5b8;border-radius:13px;padding:10px 13px;font-size:11px;font-weight:900}
+.filter.active{color:#001015;background:#bdefff;border-color:#bdefff}
+.license{padding:15px;border:1px solid var(--line);border-radius:20px;background:#0d1419;margin:10px 0}
+.license-top{display:flex;gap:10px;align-items:flex-start}
+.license code{font-size:14px;font-weight:950}
+.license-meta{margin-top:5px;color:var(--muted);font-size:11px;line-height:1.6}
+.menu{margin-left:auto;border:0;background:transparent;color:var(--cyan);font-size:23px;padding:0 2px}
+.actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.action{border:1px solid #29414a;border-radius:11px;background:#0a1317;color:#b9c5c8;padding:8px 10px;font-size:10px;font-weight:950}
+.action.green{border-color:#00f59a66;color:var(--green)}.action.yellow{border-color:#ffc84d66;color:var(--yellow)}.action.red{border-color:#ff526866;color:var(--red)}.action.cyan{border-color:#12dfff66;color:var(--cyan)}
+.device{padding:15px;border:1px solid var(--line);border-radius:20px;background:#0d1419;margin:10px 0}
+.device-head{display:flex;gap:10px;align-items:center}.phone{width:42px;height:42px;border-radius:14px;background:#12dfff12;color:var(--cyan);display:grid;place-items:center;font-size:20px}
+.device-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:12px}
+.device-grid div{background:#080e12;border-radius:11px;padding:9px}.device-grid small{display:block;color:var(--muted);font-size:9px}.device-grid b{display:block;font-size:11px;margin-top:3px;word-break:break-word}
+.settingsrow{display:flex;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid #13252b;font-size:13px}.settingsrow:last-child{border:0}
+.notice{padding:12px;border-radius:14px;background:#0b1418;color:var(--muted);font-size:11px;line-height:1.6}
+.bottom{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);height:76px;background:rgba(9,14,18,.97);border-top:1px solid #15272d;display:grid;grid-template-columns:repeat(4,1fr);z-index:30;padding-bottom:env(safe-area-inset-bottom)}
+.navbtn{border:0;background:transparent;color:#69777b;font-size:10px;font-weight:900;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px}
+.navbtn .ico{font-size:21px}.navbtn.active{color:var(--cyan)}
+.toast{position:fixed;z-index:50;left:16px;right:16px;bottom:91px;padding:13px 15px;border-radius:14px;background:#0c171a;border:1px solid var(--green);color:white;text-align:center;font-size:12px;font-weight:850;display:none}
+.empty{text-align:center;padding:28px;color:var(--muted)}
+@media(max-width:430px){.plans{grid-template-columns:1fr 1fr}.plan:last-child{grid-column:1/-1}.overview{grid-template-columns:1fr}.device-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+<header>
+  <div class="brand">
+    <div><h1><span>●</span> SADEE X DIMA</h1><small>ADMIN CONTROL CENTER // CYBER OPS</small></div>
+    <button class="refresh" onclick="loadAll()" title="Refresh">↻</button>
+  </div>
+</header>
+
+<main>
+<section id="page-dashboard" class="page active">
+  <div class="card online">
+    <div class="shield">◆</div><div><b>SYSTEM ONLINE</b><p id="connection">Supabase license service connected</p></div><i class="dot"></i>
+  </div>
+  <div class="stats">
+    <div class="stat green"><div class="icon">✓</div><div id="active" class="num">0</div><div class="label">ACTIVE</div></div>
+    <div class="stat cyan"><div class="icon">🔑</div><div id="unused" class="num">0</div><div class="label">UNUSED</div></div>
+    <div class="stat yellow"><div class="icon">Ⅱ</div><div id="paused" class="num">0</div><div class="label">PAUSED</div></div>
+    <div class="stat red"><div class="icon">⌧</div><div id="expired" class="num">0</div><div class="label">EXPIRED</div></div>
+  </div>
+
+  <div class="card generator">
+    <div class="generator-title">⚡ QUICK LICENSE GENERATOR // AUTO-COPY</div>
+    <div class="plans">
+      <button class="plan selected" data-days="7" onclick="selectPlan(7,this)"><strong>7 DAYS</strong><span>LKR 500</span></button>
+      <button class="plan" data-days="30" onclick="selectPlan(30,this)"><strong>1 MONTH</strong><span>LKR 1,000</span></button>
+      <button class="plan" data-days="0" onclick="selectPlan(0,this)"><strong>LIFETIME</strong><span>LKR 2,200</span></button>
+    </div>
+    <button class="generate" onclick="generateKey()">🔑 GENERATE KEY • AUTO COPY</button>
+    <div id="generated"></div>
+  </div>
+
+  <div class="card"><h2>📊 PLAN OVERVIEW</h2><div id="planOverview" class="overview"></div></div>
+  <div class="card"><h2>🕘 RECENT LICENSES</h2><div id="recent"></div></div>
+</section>
+
+<section id="page-licenses" class="page">
+  <input id="search" class="search" placeholder="🔎 Search key / device / status..." oninput="renderLicenses()">
+  <div class="filters">
+    <button class="filter active" onclick="setFilter('all',this)">ALL</button>
+    <button class="filter" onclick="setFilter('unused',this)">UNUSED</button>
+    <button class="filter" onclick="setFilter('active',this)">ACTIVE</button>
+    <button class="filter" onclick="setFilter('paused',this)">PAUSED</button>
+    <button class="filter" onclick="setFilter('expired',this)">EXPIRED</button>
+  </div>
+  <div id="licenses"></div>
+</section>
+
+<section id="page-devices" class="page">
+  <div class="card"><h2>📱 BOUND DEVICES</h2><div><strong id="deviceCount" class="cyan" style="font-size:30px">0</strong> <span class="muted">license/device records</span></div></div>
+  <div id="devices"></div>
+</section>
+
+<section id="page-settings" class="page">
+  <div class="card">
+    <h2>⚙️ CONTROL CENTER</h2>
+    <div class="settingsrow"><span>Supabase REST</span><b class="green">CONNECTED</b></div>
+    <div class="settingsrow"><span>License generator</span><b class="cyan">ENABLED</b></div>
+    <div class="settingsrow"><span>Device binding</span><b class="green">1 DEVICE / KEY</b></div>
+    <div class="settingsrow"><span>Auto refresh</span><b class="purple">15 SEC</b></div>
+    <div class="settingsrow"><span>Dashboard access</span><b class="cyan">NO LOGIN</b></div>
+  </div>
+  <div class="card">
+    <h2>🛡️ DATABASE</h2>
+    <div class="notice">This dashboard uses the Supabase publishable key. Never put a Supabase service-role/secret key in this HTML. Database write permissions must be protected appropriately for a production deployment.</div>
+    <button class="action cyan" style="margin-top:12px" onclick="loadAll()">↻ REFRESH DATA</button>
+  </div>
+</section>
+</main>
+</div>
+
+<nav class="bottom">
+ <button class="navbtn active" onclick="showPage('dashboard',this)"><span class="ico">▦</span>DASHBOARD</button>
+ <button class="navbtn" onclick="showPage('licenses',this)"><span class="ico">🔑</span>LICENSES</button>
+ <button class="navbtn" onclick="showPage('devices',this)"><span class="ico">▣</span>DEVICES</button>
+ <button class="navbtn" onclick="showPage('settings',this)"><span class="ico">⚙</span>SETTINGS</button>
+</nav>
+<div id="toast" class="toast"></div>
+
+<script>
+const SUPABASE_URL='https://cpmzjplfqggmgeotmtcd.supabase.co';
+const SUPABASE_KEY='sb_publishable_z0kmWe85ybkmBg7bzEtyKA_kMH6WGXW';
+const db=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+let allLicenses=[], selectedDays=7, currentFilter='all';
+
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+const norm=s=>String(s??'').toLowerCase();
+
+function showPage(name,btn){
+ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+ document.getElementById('page-'+name).classList.add('active');
+ document.querySelectorAll('.navbtn').forEach(b=>b.classList.remove('active'));
+ btn.classList.add('active');
+ if(name==='licenses')renderLicenses();
+ if(name==='devices')renderDevices();
+}
+function toast(msg){
+ const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';
+ clearTimeout(window.__toast);window.__toast=setTimeout(()=>t.style.display='none',2300);
+}
+function selectPlan(days,btn){
+ selectedDays=days;document.querySelectorAll('.plan').forEach(x=>x.classList.remove('selected'));btn.classList.add('selected');
+}
+function makeKey(){
+ const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+ const a=new Uint32Array(12);crypto.getRandomValues(a);let out='SXD-';
+ for(let g=0;g<3;g++){for(let i=0;i<4;i++)out+=chars[a[g*4+i]%chars.length];if(g<2)out+='-'}
+ return out;
+}
+async function copyText(value){
+ try{await navigator.clipboard.writeText(value);return true}
+ catch(e){const ta=document.createElement('textarea');ta.value=value;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();return true}
+}
+function expiryFor(days){return days?new Date(Date.now()+days*86400000).toISOString():null}
+function planName(days){return days===7?'7 days':days===30?'30 days':'Lifetime'}
+function planPrice(days){return days===7?500:days===30?1000:2200}
+
+async function generateKey(){
+ const key=makeKey(),plan=planName(selectedDays),price=planPrice(selectedDays);
+ const {error}=await db.from('licenses').insert({
+   license_key:key,plan,price,status:'unused',expires_at:expiryFor(selectedDays),device_id:null
+ });
+ if(error){toast('CREATE FAILED: '+error.message);return}
+ await copyText(key);
+ document.getElementById('generated').innerHTML=
+   '<div class="generated">'+esc(key)+'</div><button class="copy" onclick="copyText('+JSON.stringify(key)+').then(()=>toast(\'KEY COPIED\'))">📋 COPY KEY AGAIN</button>'+
+   '<div class="green" style="margin-top:9px;font-size:11px;font-weight:900">✓ CREATED • '+esc(plan.toUpperCase())+' • LKR '+price+' • COPIED</div>';
+ toast('LICENSE KEY COPIED');
+ await loadAll();
+}
+function effectiveStatus(x){
+ const s=norm(x.status||'unused');
+ if(x.expires_at && new Date(x.expires_at)<=new Date() && s!=='paused')return 'expired';
+ return ['active','unused','paused','expired'].includes(s)?s:'unused';
+}
+function remaining(x){
+ if(!x.expires_at)return 'LIFETIME';
+ const ms=new Date(x.expires_at)-Date.now();
+ if(ms<=0)return 'EXPIRED';
+ const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000);
+ return h+'h '+m+'m remaining';
+}
+function badge(s){return '<span class="badge '+s+'">'+s.toUpperCase()+'</span>'}
+function renderStats(){
+ const counts={active:0,unused:0,paused:0,expired:0};
+ allLicenses.forEach(x=>counts[effectiveStatus(x)]++);
+ for(const k of Object.keys(counts))document.getElementById(k).textContent=counts[k];
+ const plans={};
+ allLicenses.forEach(x=>{const p=x.plan||'Unknown';if(!plans[p])plans[p]={count:0,price:x.price||0};plans[p].count++});
+ document.getElementById('planOverview').innerHTML=Object.entries(plans).map(([p,v])=>
+  '<div><b>'+esc(p)+'</b><strong>LKR '+Number(v.price).toLocaleString()+'</strong><small>'+v.count+' keys</small></div>'
+ ).join('')||'<div class="muted">No keys yet.</div>';
+ const recent=[...allLicenses].slice(0,5);
+ document.getElementById('recent').innerHTML=recent.map(x=>
+  '<div class="recent-row"><div class="keyicon">🔑</div><div><code>'+esc(x.license_key)+'</code><small>'+esc(x.plan||'')+' • '+esc(remaining(x))+'</small></div>'+badge(effectiveStatus(x))+'</div>'
+ ).join('')||'<div class="empty">No licenses yet.</div>';
+}
+function actionButton(text,cls,fn){return '<button class="action '+cls+'" onclick="'+fn+'">'+text+'</button>'}
+function renderLicenses(){
+ const q=norm(document.getElementById('search')?.value);
+ let list=allLicenses.filter(x=>JSON.stringify(x).toLowerCase().includes(q));
+ if(currentFilter!=='all')list=list.filter(x=>effectiveStatus(x)===currentFilter);
+ document.getElementById('licenses').innerHTML=list.map(x=>{
+   const k=x.license_key,s=effectiveStatus(x);
+   let acts='';
+   if(s==='unused')acts+=actionButton('SET ACTIVE','green',`changeStatus('${js(k)}','active')`);
+   if(s==='active')acts+=actionButton('PAUSE','yellow',`changeStatus('${js(k)}','paused')`);
+   if(s==='paused')acts+=actionButton('RESUME','green',`changeStatus('${js(k)}','active')`);
+   acts+=actionButton('UNBIND DEVICE','cyan',`unbind('${js(k)}')`);
+   if(s!=='expired')acts+=actionButton('EXPIRE','red',`changeStatus('${js(k)}','expired')`);
+   acts+=actionButton('DELETE','red',`deleteKey('${js(k)}')`);
+   return '<div class="license"><div class="license-top"><div style="flex:1"><code>'+esc(k)+'</code><div class="license-meta">'+esc(x.plan||'')+' • '+esc(remaining(x))+'<br>Device: '+esc(x.device_model||'Not bound')+'</div></div>'+badge(s)+'</div>'+
+    '<div class="device-grid"><div><small>DEVICE ID</small><b>'+esc(x.device_id||'Not bound')+'</b></div><div><small>RAM</small><b>'+esc(x.device_ram||'-')+'</b></div><div><small>CPU</small><b>'+esc(x.device_cpu||'-')+'</b></div><div><small>ANDROID</small><b>'+esc(x.android_version||'-')+'</b></div></div>'+
+    '<div class="actions">'+acts+'</div></div>';
+ }).join('')||'<div class="card empty">No matching licenses.</div>';
+}
+function js(v){return String(v??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,' ')}
+function setFilter(f,btn){
+ currentFilter=f;document.querySelectorAll('.filter').forEach(x=>x.classList.remove('active'));btn.classList.add('active');renderLicenses();
+}
+async function changeStatus(key,status){
+ const {error}=await db.from('licenses').update({status}).eq('license_key',key);
+ if(error)toast('UPDATE FAILED: '+error.message);else{toast(status.toUpperCase());await loadAll()}
+}
+async function unbind(key){
+ const patch={device_id:null,device_model:null,device_ram:null,device_storage:null,device_cpu:null,android_version:null,network_type:null,bound_at:null};
+ const {error}=await db.from('licenses').update(patch).eq('license_key',key);
+ if(error)toast('UNBIND FAILED: '+error.message);else{toast('DEVICE UNBOUND');await loadAll()}
+}
+async function deleteKey(key){
+ if(!confirm('Delete '+key+'?'))return;
+ const {error}=await db.from('licenses').delete().eq('license_key',key);
+ if(error)toast('DELETE FAILED: '+error.message);else{toast('LICENSE DELETED');await loadAll()}
+}
+function renderDevices(){
+ const list=allLicenses.filter(x=>x.device_id);
+ document.getElementById('deviceCount').textContent=list.length;
+ document.getElementById('devices').innerHTML=list.map(x=>
+  '<div class="device"><div class="device-head"><div class="phone">▣</div><div style="flex:1"><code>'+esc(x.license_key)+'</code><div class="muted" style="font-size:11px;margin-top:3px">'+esc(x.plan||'')+' • '+esc(remaining(x))+'</div></div>'+badge(effectiveStatus(x))+'</div>'+
+  '<div class="device-grid"><div><small>MODEL</small><b>'+esc(x.device_model||'-')+'</b></div><div><small>RAM</small><b>'+esc(x.device_ram||'-')+'</b></div><div><small>STORAGE</small><b>'+esc(x.device_storage||'-')+'</b></div><div><small>CPU</small><b>'+esc(x.device_cpu||'-')+'</b></div><div><small>ANDROID</small><b>'+esc(x.android_version||'-')+'</b></div><div><small>NETWORK</small><b>'+esc(x.network_type||'-')+'</b></div></div></div>'
+ ).join('')||'<div class="card empty">No bound devices.</div>';
+}
+async function loadAll(){
+ document.getElementById('connection').textContent='Loading Supabase license data...';
+ const {data,error}=await db.from('licenses').select('*').order('created_at',{ascending:false});
+ if(error){document.getElementById('connection').textContent='Connection error: '+error.message;toast('SUPABASE ERROR');return}
+ allLicenses=data||[];document.getElementById('connection').textContent='Supabase license service connected';
+ renderStats();renderLicenses();renderDevices();
+}
+setInterval(loadAll,15000);
+loadAll();
+</script>
+</body>
+</html>
