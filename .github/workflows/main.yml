@@ -16,10 +16,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -29,218 +29,124 @@ jobs:
         shell: bash
         run: |
           set -e
-
           export ANDROID_HOME=/usr/local/lib/android/sdk
           export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
-
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f \
-            -name sdkmanager \
-            -perm -111 \
-            | sort \
-            | tail -n 1)
-
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -perm -111 | sort | tail -n 1)"
           if [ -z "$SDKMANAGER" ]; then
             echo "sdkmanager not found"
             exit 1
           fi
 
-          yes | "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" \
-            --licenses >/dev/null 2>&1 || true
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platform-tools"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-35"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "build-tools;35.0.0"
 
-          "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" \
-            "platform-tools"
-
-          "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" \
-            "platforms;android-35"
-
-          "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" \
-            "build-tools;35.0.0"
-
-      - name: Find ZIP
-        id: findzip
+      - name: Find project ZIP
+        id: zip
         shell: bash
         run: |
           set -e
-
-          ZIP_FILE=$(find "$GITHUB_WORKSPACE" \
-            -type f \
-            -iname "*.zip" \
-            ! -path "$GITHUB_WORKSPACE/.git/*" \
-            | sort \
-            | head -n 1)
-
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -type f -iname '*.zip' ! -path "$GITHUB_WORKSPACE/.git/*" | sort | head -n 1)"
           if [ -z "$ZIP_FILE" ]; then
-            echo "No ZIP file found."
+            echo "ERROR: No ZIP file found."
             exit 1
           fi
-
-          echo "ZIP found:"
-          echo "$ZIP_FILE"
-
+          echo "Found: $ZIP_FILE"
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Extract ZIP
+      - name: Extract project ZIP
         shell: bash
         run: |
           set -e
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
 
-          rm -rf "$GITHUB_WORKSPACE/extracted"
-          mkdir -p "$GITHUB_WORKSPACE/extracted"
-
-          unzip -o \
-            "${{ steps.findzip.outputs.zip_file }}" \
-            -d "$GITHUB_WORKSPACE/extracted"
-
-      - name: Find Android project
+      - name: Detect Android project
         id: project
         shell: bash
         run: |
           set -e
-
           ROOT="$GITHUB_WORKSPACE/extracted"
           PROJECT=""
 
-          SETTINGS=$(find "$ROOT" \
-            -type f \
-            \( \
-              -name "settings.gradle" \
-              -o \
-              -name "settings.gradle.kts" \
-            \) \
-            | sort \
-            | head -n 1)
-
-          if [ -n "$SETTINGS" ]; then
-            PROJECT=$(dirname "$SETTINGS")
+          FILE="$(find "$ROOT" -type f \( -name settings.gradle -o -name settings.gradle.kts \) | sort | head -n 1)"
+          if [ -n "$FILE" ]; then
+            PROJECT="$(dirname "$FILE")"
           fi
 
           if [ -z "$PROJECT" ]; then
-            GRADLEW=$(find "$ROOT" \
-              -type f \
-              -name "gradlew" \
-              | sort \
-              | head -n 1)
-
-            if [ -n "$GRADLEW" ]; then
-              PROJECT=$(dirname "$GRADLEW")
+            FILE="$(find "$ROOT" -type f -name gradlew | sort | head -n 1)"
+            if [ -n "$FILE" ]; then
+              PROJECT="$(dirname "$FILE")"
             fi
           fi
 
           if [ -z "$PROJECT" ]; then
-            BUILD_FILE=$(find "$ROOT" \
-              -type f \
-              \( \
-                -name "build.gradle" \
-                -o \
-                -name "build.gradle.kts" \
-              \) \
-              | sort \
-              | head -n 1)
-
-            if [ -n "$BUILD_FILE" ]; then
-              PROJECT=$(dirname "$BUILD_FILE")
+            FILE="$(find "$ROOT" -type f \( -name build.gradle -o -name build.gradle.kts \) | sort | head -n 1)"
+            if [ -n "$FILE" ]; then
+              PROJECT="$(dirname "$FILE")"
             fi
           fi
 
           if [ -z "$PROJECT" ]; then
-            echo "Android project not found."
+            echo "ERROR: Android project not found."
             find "$ROOT" -maxdepth 8 -type f | sort
             exit 1
           fi
 
-          echo "Android project:"
-          echo "$PROJECT"
-
+          echo "Android project: $PROJECT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Prepare Gradle
+      - name: Prepare Gradle wrapper
         shell: bash
         run: |
           set -e
+          cd "${{ steps.project.outputs.project }}"
 
-          PROJECT="${{ steps.project.outputs.project }}"
-
-          cd "$PROJECT"
-
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
+          if [ -f gradlew ]; then
+            chmod +x gradlew
           else
-            if command -v gradle >/dev/null 2>&1; then
-              gradle wrapper --gradle-version 8.7
-              chmod +x ./gradlew
-            else
-              echo "Gradle wrapper not found."
-              exit 1
-            fi
+            gradle wrapper --gradle-version 8.7
+            chmod +x gradlew
           fi
 
           ./gradlew --version
 
-      - name: Configure Gradle
+      - name: Fix missing addStableGame
         shell: bash
         run: |
           set -e
 
           PROJECT="${{ steps.project.outputs.project }}"
-
-          cd "$PROJECT"
-
-          touch gradle.properties
-
-          if ! grep -q "^org.gradle.jvmargs=" gradle.properties; then
-            echo "org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8" >> gradle.properties
-          fi
-
-          if ! grep -q "^org.gradle.daemon=" gradle.properties; then
-            echo "org.gradle.daemon=false" >> gradle.properties
-          fi
-
-      - name: Fix MainActivity
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT="${{ steps.project.outputs.project }}"
-
           MAIN="$PROJECT/app/src/main/java/com/sadee/optimizer/MainActivity.java"
 
           if [ ! -f "$MAIN" ]; then
-            MAIN=$(find "$PROJECT" \
-              -type f \
-              -name "MainActivity.java" \
-              | head -n 1)
+            MAIN="$(find "$PROJECT" -type f -name MainActivity.java | head -n 1)"
           fi
 
           if [ -z "$MAIN" ] || [ ! -f "$MAIN" ]; then
-            echo "MainActivity.java not found."
+            echo "ERROR: MainActivity.java not found."
             exit 1
           fi
 
-          echo "MainActivity:"
-          echo "$MAIN"
+          CALLS="$(grep -c 'addStableGame("' "$MAIN" || true)"
+          METHOD="$(grep -cE '(^|[[:space:]])(private|public|protected)?[[:space:]]*void[[:space:]]+addStableGame[[:space:]]*\(' "$MAIN" || true)"
 
-          CALLS=$(grep -c 'addStableGame("' "$MAIN" || true)
-          METHOD=$(grep -cE 'void[[:space:]]+addStableGame[[:space:]]*\(' "$MAIN" || true)
-
-          echo "addStableGame calls: $CALLS"
-          echo "addStableGame methods: $METHOD"
+          echo "MainActivity: $MAIN"
+          echo "Calls: $CALLS"
+          echo "Methods: $METHOD"
 
           if [ "$CALLS" -gt 0 ] && [ "$METHOD" -eq 0 ]; then
-
-            python3 - "$MAIN" <<'PY'
+            python3 - "$MAIN" <<'PYCODE'
 import sys
 
 path = sys.argv[1]
@@ -248,7 +154,20 @@ path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     text = f.read()
 
-method = """
+imports = [
+    "import android.content.Intent;",
+    "import android.content.pm.PackageManager;",
+    "import android.util.Log;"
+]
+
+for imp in imports:
+    if imp not in text:
+        start = text.find("package ")
+        if start >= 0:
+            end = text.find("\n", start)
+            text = text[:end + 1] + imp + "\n" + text[end + 1:]
+
+method = r"""
     private void addStableGame(String gameName, String packageName) {
         try {
             PackageManager pm = getPackageManager();
@@ -267,131 +186,82 @@ method = """
 
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
-            Log.d(
-                "SADEE_GAME",
-                gameName + " detected: " + packageName
-            );
+            Log.d("SADEE_GAME", gameName + " detected: " + packageName);
 
         } catch (Exception e) {
-            Log.e(
-                "SADEE_GAME",
-                "Game detection failed: " + gameName,
-                e
-            );
+            Log.e("SADEE_GAME", "Game detection failed: " + gameName, e);
         }
     }
 
 """
 
 pos = text.rfind("}")
-
-if pos == -1:
-    raise SystemExit("Final Java class brace not found")
+if pos < 0:
+    raise SystemExit("Could not find final Java class brace.")
 
 text = text[:pos] + method + text[pos:]
-
-imports = [
-    "import android.content.Intent;",
-    "import android.content.pm.PackageManager;",
-    "import android.util.Log;"
-]
-
-lines = text.splitlines()
-
-for imp in imports:
-    if imp not in lines:
-        package_index = -1
-
-        for i, line in enumerate(lines):
-            if line.startswith("package "):
-                package_index = i
-                break
-
-        if package_index >= 0:
-            lines.insert(package_index + 1, imp)
-
-text = "\n".join(lines) + "\n"
 
 with open(path, "w", encoding="utf-8") as f:
     f.write(text)
 
-print("Missing addStableGame() fixed.")
-PY
-
+print("addStableGame() was added.")
+PYCODE
           fi
 
-          echo "Java source check:"
           grep -n "addStableGame" "$MAIN" || true
 
-      - name: Build Release APK
+      - name: Configure Gradle
         shell: bash
         run: |
           set -e
+          cd "${{ steps.project.outputs.project }}"
+          touch gradle.properties
 
-          PROJECT="${{ steps.project.outputs.project }}"
+          grep -q '^org.gradle.jvmargs=' gradle.properties || echo 'org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8' >> gradle.properties
+          grep -q '^org.gradle.daemon=' gradle.properties || echo 'org.gradle.daemon=false' >> gradle.properties
 
-          cd "$PROJECT"
+      - name: Build release APK
+        shell: bash
+        run: |
+          set -e
+          cd "${{ steps.project.outputs.project }}"
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace --warning-mode all
 
-          chmod +x ./gradlew
-
-          ./gradlew assembleRelease \
-            --no-daemon \
-            --stacktrace \
-            --warning-mode all
-
-      - name: Find APK
+      - name: Find release APK
         id: apk
         shell: bash
         run: |
           set -e
-
           PROJECT="${{ steps.project.outputs.project }}"
 
-          APK=$(find "$PROJECT" \
-            -type f \
-            -name "*.apk" \
-            -path "*/build/outputs/*" \
-            | grep -Ei "release.*\.apk$" \
-            | head -n 1)
+          APK="$(find "$PROJECT" -type f -name '*.apk' -path '*/build/outputs/*' | grep -Ei 'release.*\.apk$' | head -n 1 || true)"
 
           if [ -z "$APK" ]; then
-            APK=$(find "$PROJECT" \
-              -type f \
-              -name "*.apk" \
-              -path "*/build/outputs/*" \
-              | head -n 1)
+            APK="$(find "$PROJECT" -type f -name '*.apk' -path '*/build/outputs/*' | head -n 1 || true)"
           fi
 
           if [ -z "$APK" ]; then
-            echo "APK was not generated."
-            find "$PROJECT" -type f -name "*.apk" -print || true
+            echo "ERROR: No APK was generated."
             exit 1
           fi
 
-          echo "APK:"
-          echo "$APK"
-
+          echo "APK: $APK"
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
 
-      - name: Find build tools
+      - name: Find Android build tools
         id: tools
         shell: bash
         run: |
           set -e
-
           TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 
           if [ ! -d "$TOOLS" ]; then
-            TOOLS=$(find "$ANDROID_HOME/build-tools" \
-              -mindepth 1 \
-              -maxdepth 1 \
-              -type d \
-              | sort -V \
-              | tail -n 1)
+            TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           fi
 
           if [ -z "$TOOLS" ]; then
-            echo "Build tools not found."
+            echo "ERROR: Build tools not found."
             exit 1
           fi
 
@@ -401,12 +271,9 @@ PY
         shell: bash
         run: |
           set -e
-
           mkdir -p signing
 
-          keytool \
-            -genkeypair \
-            -v \
+          keytool -genkeypair -v \
             -keystore signing/release.keystore \
             -alias sadee \
             -keyalg RSA \
@@ -426,11 +293,7 @@ PY
 
           mkdir -p signed
 
-          "$TOOLS/zipalign" \
-            -f \
-            4 \
-            "$APK" \
-            signed/aligned.apk
+          "$TOOLS/zipalign" -f 4 "$APK" signed/aligned.apk
 
           "$TOOLS/apksigner" sign \
             --ks signing/release.keystore \
@@ -446,13 +309,9 @@ PY
         shell: bash
         run: |
           set -e
-
           TOOLS="${{ steps.tools.outputs.tools }}"
 
-          "$TOOLS/apksigner" verify \
-            --verbose \
-            signed/SADEE_X_DIMA_OPTIMIZER.apk
-
+          "$TOOLS/apksigner" verify --verbose signed/SADEE_X_DIMA_OPTIMIZER.apk
           ls -lh signed/SADEE_X_DIMA_OPTIMIZER.apk
 
       - name: Upload APK
@@ -467,43 +326,24 @@ PY
         shell: bash
         run: |
           set -e
-
           PROJECT="${{ steps.project.outputs.project }}"
 
-          ADMIN=$(find "$PROJECT" \
-            -type f \
-            -path "*/admin-dashboard/index.html" \
-            | head -n 1)
+          ADMIN="$(find "$PROJECT" -type f -path '*/admin-dashboard/index.html' | head -n 1 || true)"
 
           if [ -z "$ADMIN" ]; then
-            echo "No admin dashboard found."
+            echo "No admin dashboard found. Skipping."
             exit 0
           fi
 
           rm -rf public
           mkdir -p public
+          cp -r "$(dirname "$ADMIN")"/. public/
 
-          ADMIN_DIR=$(dirname "$ADMIN")
-
-          cp -r "$ADMIN_DIR"/. public/
-
-          echo "Admin dashboard prepared."
-
-      - name: Deploy admin dashboard
-        if: success()
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
-          publish_branch: gh-pages
-          force_orphan: true
-
-      - name: Success
+      - name: Build success
         if: success()
         shell: bash
         run: |
           echo "========================================"
           echo " SADEE X DIMA BUILD SUCCESS"
           echo "========================================"
-          echo "APK:"
           ls -lh signed/SADEE_X_DIMA_OPTIMIZER.apk
