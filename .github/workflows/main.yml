@@ -1,46 +1,39 @@
-name: SADEE X DIMA V3 - AUTO LOGIN + DASHBOARD + SIGNED APK
+name: SADEE X DIMA - RED NEON DASHBOARD - SIGNED APK + ADMIN
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: sadee-red-neon-build
+  cancel-in-progress: true
+
 jobs:
   build:
+    name: Build Signed APK + Deploy Admin
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Locate project ZIP
+      - name: Find project ZIP automatically
+        id: zip
         shell: bash
         run: |
           set -euo pipefail
-          echo "ZIP files found:"
-          find . -type f -iname '*.zip' ! -path './.git/*' -print | sort
-
-          ZIP="$(find . -type f -iname 'SADEE_X_DIMA_AUTO_LOGIN_DASHBOARD_V3.zip' ! -path './.git/*' | head -n 1 || true)"
-
-          if [ -z "$ZIP" ]; then
-            ZIP="$(find . -type f -iname '*.zip' ! -path './.git/*' | grep -Ei 'AUTO_LOGIN|DASHBOARD|FULL_FIXED|ADVANCED.*V2|GREEN' | sort | tail -n 1 || true)"
-          fi
-
-          if [ -z "$ZIP" ]; then
-            ZIP="$(find . -type f -iname '*.zip' ! -path './.git/*' | sort | tail -n 1 || true)"
-          fi
-
-          if [ -z "$ZIP" ]; then
-            echo "::error::No project ZIP found. Upload the V3 ZIP to the repository root."
+          mapfile -t ZIPS < <(find "$GITHUB_WORKSPACE" -type f -name '*.zip' -not -path '*/.git/*' | sort)
+          if [ "${#ZIPS[@]}" -eq 0 ]; then
+            echo 'ERROR: No project ZIP found in repository root/subfolders.'
+            echo 'Upload the generated SADEE X DIMA ZIP first.'
             exit 1
           fi
-
-          echo "Using ZIP: $ZIP"
-          echo "ZIP_PATH=$ZIP" >> "$GITHUB_ENV"
+          ZIP_FILE="${ZIPS[-1]}"
+          echo "Using ZIP: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Extract project
         shell: bash
@@ -48,148 +41,168 @@ jobs:
           set -euo pipefail
           rm -rf extracted
           mkdir -p extracted
-          unzip -q "$ZIP_PATH" -d extracted
+          unzip -q -o "${{ steps.zip.outputs.zip_file }}" -d extracted
 
-          PROJECT="$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit | xargs -r dirname)"
-          if [ -z "$PROJECT" ]; then
-            echo "::error::No Android Gradle project found inside ZIP."
-            find extracted -maxdepth 5 -type f | head -n 150
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT"
-
-      - name: Verify V3 source
+      - name: Locate Android project
+        id: android
         shell: bash
         run: |
           set -euo pipefail
-          test -f "$PROJECT_DIR/app/build.gradle" || test -f "$PROJECT_DIR/app/build.gradle.kts"
-          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
-          test -f "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/MainActivity.java"
-          test -f "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/Supabase.java"
-          test -f "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/DeviceInfo.java"
-          grep -q 'tryAutoLogin' "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/MainActivity.java"
-          grep -q 'sadee_secure_session' "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/MainActivity.java"
-          echo "V3 auto-login source check: OK"
+          SETTINGS="$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1 || true)"
+          [ -n "$SETTINGS" ] || { echo 'ERROR: settings.gradle/settings.gradle.kts not found'; exit 1; }
+          PROJECT="$(dirname "$SETTINGS")"
+          [ -d "$PROJECT/app/src/main" ] || { echo "ERROR: Android app module not found: $PROJECT"; exit 1; }
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Android project: $PROJECT"
 
-      - name: Set up Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
-      - name: Set up Gradle 8.7
+      - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
       - name: Configure Gradle
+        working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set -euo pipefail
-          cat > "$PROJECT_DIR/gradle.properties" <<'EOF'
-          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           android.enableJetifier=true
-          org.gradle.daemon=false
+          android.nonTransitiveRClass=true
           EOF
 
-      - name: Build release APK
+      - name: Validate project source
+        working-directory: ${{ steps.android.outputs.project }}
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_DIR"
-          gradle clean assembleRelease --no-daemon --stacktrace --info
-
-          APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
-          if [ -z "$APK" ]; then
-            echo "::error::No release APK produced."
-            exit 1
+          required=(
+            app/src/main/AndroidManifest.xml
+            app/src/main/java/com/sadee/optimizer/MainActivity.java
+            app/src/main/java/com/sadee/optimizer/Supabase.java
+            app/src/main/java/com/sadee/optimizer/DeviceInfo.java
+            app/src/main/java/com/sadee/optimizer/Config.java
+            app/src/main/res/drawable/sadee_logo.jpg
+          )
+          for f in "${required[@]}"; do
+            test -f "$f" || { echo "MISSING: $f"; exit 1; }
+          done
+          if grep -nE 'addPlan\(' app/src/main/java/com/sadee/optimizer/MainActivity.java; then
+            echo 'ERROR: unexpected addPlan() call remains'; exit 1
           fi
-          echo "APK_PATH=$PROJECT_DIR/$APK" >> "$GITHUB_ENV"
-          echo "Built: $APK"
+          echo 'Source validation passed.'
 
-      - name: Prepare signing tools
+      - name: Build release APK
+        working-directory: ${{ steps.android.outputs.project }}
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --version
+          gradle clean assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+
+      - name: Locate Android build tools
+        id: tools
         shell: bash
         run: |
           set -euo pipefail
           BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          test -x "$BT/zipalign"
-          test -x "$BT/apksigner"
-          echo "BUILD_TOOLS=$BT" >> "$GITHUB_ENV"
-          "$BT/zipalign" -f -v 4 "$APK_PATH" aligned.apk
+          test -x "$BT/apksigner" || { echo 'ERROR: apksigner missing'; exit 1; }
+          test -x "$BT/zipalign" || { echo 'ERROR: zipalign missing'; exit 1; }
+          echo "bt=$BT" >> "$GITHUB_OUTPUT"
 
-      - name: Create signing key
+      - name: Generate temporary CI signing key
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p signing
           keytool -genkeypair -v \
-            -keystore sadee-release.keystore \
-            -alias sadee-release \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass android \
-            -keypass android \
-            -dname 'CN=SADEE X DIMA, OU=Mobile, O=SADEE X DIMA, L=Colombo, ST=Western, C=LK'
+            -keystore signing/sadee-ci.jks \
+            -storepass 'SadeeCI2026!' \
+            -keypass 'SadeeCI2026!' \
+            -alias sadee-ci \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname 'CN=SADEE X DIMA, OU=Mobile, O=SADEE, L=Colombo, ST=Western, C=LK'
 
-      - name: Sign and verify APK
+      - name: Align sign and verify APK
+        working-directory: ${{ steps.android.outputs.project }}
+        env:
+          BT: ${{ steps.tools.outputs.bt }}
         shell: bash
         run: |
           set -euo pipefail
-          "$BUILD_TOOLS/apksigner" sign \
-            --ks sadee-release.keystore \
-            --ks-key-alias sadee-release \
-            --ks-pass pass:android \
-            --key-pass pass:android \
-            --out SADEE-X-DIMA-AUTO-LOGIN-release.apk \
-            aligned.apk
-
-          "$BUILD_TOOLS/apksigner" verify --verbose SADEE-X-DIMA-AUTO-LOGIN-release.apk
-          ls -lh SADEE-X-DIMA-AUTO-LOGIN-release.apk
+          INPUT="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n 1 || true)"
+          [ -n "$INPUT" ] || { echo 'ERROR: No release APK produced'; exit 1; }
+          mkdir -p app/build/outputs/apk/final
+          ALIGNED=app/build/outputs/apk/final/SADEE-X-DIMA-OPTIMIZER-aligned.apk
+          SIGNED=app/build/outputs/apk/final/SADEE-X-DIMA-OPTIMIZER-RED-NEON-release.apk
+          "$BT/zipalign" -f -p 4 "$INPUT" "$ALIGNED"
+          "$BT/apksigner" sign \
+            --ks "$GITHUB_WORKSPACE/signing/sadee-ci.jks" \
+            --ks-key-alias sadee-ci \
+            --ks-pass pass:'SadeeCI2026!' \
+            --key-pass pass:'SadeeCI2026!' \
+            --out "$SIGNED" "$ALIGNED"
+          "$BT/apksigner" verify --verbose "$SIGNED"
+          rm -f "$ALIGNED"
+          echo "SIGNED APK READY: $SIGNED"
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-AUTO-LOGIN-SIGNED-APK
-          path: SADEE-X-DIMA-AUTO-LOGIN-release.apk
+          name: SADEE-X-DIMA-RED-NEON-SIGNED-APK
+          path: ${{ steps.android.outputs.project }}/app/build/outputs/apk/final/SADEE-X-DIMA-OPTIMIZER-RED-NEON-release.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
-      - name: Upload build reports
+      - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-V3-BUILD-REPORTS
-          path: |
-            ${{ env.PROJECT_DIR }}/app/build/reports/**
-            ${{ env.PROJECT_DIR }}/app/build/outputs/logs/**
-          if-no-files-found: ignore
-          retention-days: 7
+          name: SADEE-X-DIMA-RED-NEON-BUILD-LOG
+          path: ${{ steps.android.outputs.project }}/build.log
+          if-no-files-found: warn
+          retention-days: 30
 
-      - name: Prepare admin dashboard
-        if: success()
+      - name: Locate admin dashboard
+        id: admin
         shell: bash
         run: |
           set -euo pipefail
-          ADMIN_DIR="$(find "$PROJECT_DIR" -type f -path '*/admin-dashboard/index.html' -print -quit | xargs -r dirname)"
-          if [ -z "$ADMIN_DIR" ]; then
-            echo "No admin dashboard found; skipping Pages deployment."
-            exit 0
-          fi
+          INDEX="$(find extracted -type f -path '*/admin-dashboard/index.html' | head -n 1 || true)"
+          [ -n "$INDEX" ] || { echo 'ERROR: admin-dashboard/index.html not found'; exit 1; }
+          echo "dir=$(dirname "$INDEX")" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare GitHub Pages
+        shell: bash
+        run: |
+          set -euo pipefail
           rm -rf public
           mkdir -p public
-          cp -R "$ADMIN_DIR"/. public/
+          cp -R "${{ steps.admin.outputs.dir }}/." public/
           touch public/.nojekyll
-          echo "Admin dashboard prepared from $ADMIN_DIR"
 
-      - name: Deploy admin dashboard
-        if: success() && hashFiles('public/index.html') != ''
+      - name: Deploy Admin Dashboard
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
           publish_branch: gh-pages
+          publish_dir: ./public
           force_orphan: true
+          enable_jekyll: false
+          commit_message: 'Deploy SADEE X DIMA Red Neon Admin Dashboard'
+
+      - name: Final summary
+        if: success()
+        run: |
+          echo '========================================='
+          echo 'SADEE X DIMA RED NEON BUILD SUCCESS'
+          echo 'Signed APK artifact: SADEE-X-DIMA-RED-NEON-SIGNED-APK'
+          echo 'Admin dashboard: gh-pages'
+          echo '========================================='
