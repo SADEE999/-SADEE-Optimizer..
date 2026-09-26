@@ -15,7 +15,7 @@ jobs:
 
     steps:
 
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -24,9 +24,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # Find ZIP uploaded to GitHub
-      - name: Find uploaded ZIP
-        id: find_zip
+      # Find uploaded ZIP
+      - name: Find ZIP
+        id: zip
         shell: bash
         run: |
           set -e
@@ -43,12 +43,12 @@ jobs:
             exit 1
           fi
 
-          echo "ZIP FOUND:"
+          echo "ZIP:"
           echo "$ZIP_FILE"
 
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-      # Extract ZIP
+      # Extract uploaded ZIP
       - name: Extract ZIP
         shell: bash
         run: |
@@ -57,19 +57,12 @@ jobs:
           rm -rf extracted
           mkdir -p extracted
 
-          echo "=============================="
-          echo "EXTRACTING UPLOADED ZIP"
-          echo "=============================="
-
-          unzip -o "${{ steps.find_zip.outputs.zip_file }}" \
+          unzip -o "${{ steps.zip.outputs.zip_file }}" \
             -d extracted
 
-          echo ""
-          echo "EXTRACTION COMPLETE"
+          echo "ZIP EXTRACTION COMPLETE"
 
-          find extracted -maxdepth 5 -type f | head -200
-
-      # Find Android project automatically
+      # Find Android project
       - name: Find Android Project
         id: project
         shell: bash
@@ -97,45 +90,36 @@ jobs:
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-      # Use runner's already installed Android SDK
+      # Android SDK
       - name: Configure Android SDK
         shell: bash
         run: |
           set -e
 
-          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
           export ANDROID_HOME="/usr/local/lib/android/sdk"
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
 
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
 
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-          echo "Android SDK:"
-          ls -la "$ANDROID_SDK_ROOT"
-
-      # Install only real SDK packages
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -e
 
-          SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager"
-
-          if [ ! -f "$SDKMANAGER" ]; then
-            SDKMANAGER=$(find /usr/local/lib/android/sdk/cmdline-tools \
-              -name sdkmanager \
-              -type f \
-              | head -n 1)
-          fi
+          SDKMANAGER=$(find /usr/local/lib/android/sdk/cmdline-tools \
+            -name sdkmanager \
+            -type f \
+            | head -n 1)
 
           if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager not found"
             exit 1
           fi
 
-          echo "Using:"
+          echo "Using sdkmanager:"
           echo "$SDKMANAGER"
 
           yes | "$SDKMANAGER" --licenses >/dev/null || true
@@ -149,22 +133,44 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Build
+      # Check Gradle wrapper
+      - name: Prepare Gradle
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f "./gradlew" ]; then
+            echo "Gradle wrapper found."
+
+            chmod +x ./gradlew
+
+          else
+            echo "Gradle wrapper NOT found."
+            echo "Using installed Gradle."
+
+            gradle --version
+          fi
+
+      # Build APK
       - name: Build Release APK
         working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
           set -e
 
-          chmod +x gradlew
-
           echo "=============================="
           echo "BUILDING SADEE X DIMA APK"
           echo "=============================="
 
-          ./gradlew clean assembleRelease --stacktrace
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew clean assembleRelease --stacktrace
+          else
+            gradle clean assembleRelease --stacktrace
+          fi
 
-      # Find generated APK
+      # Find APK
       - name: Locate APK
         id: apk
         shell: bash
@@ -177,7 +183,9 @@ jobs:
             | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: RELEASE APK NOT FOUND"
+            echo "ERROR: APK NOT FOUND"
+
+            echo "Searching all APK files..."
 
             find "${{ steps.project.outputs.project_dir }}" \
               -type f \
