@@ -14,8 +14,29 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+
+      # ==========================================
+      # CHECKOUT
+      # ==========================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+
+      # ==========================================
+      # JAVA 17
+      # ==========================================
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+
+      # ==========================================
+      # FIND ZIP
+      # ==========================================
 
       - name: Find project ZIP
         id: zip
@@ -23,9 +44,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP=""
-          while IFS= read -r -d '' f; do
-            ZIP="$f"
+          echo "=========================================="
+          echo " SEARCHING FOR SADEE X DIMA ZIP"
+          echo "=========================================="
+
+          ZIP_FILE=""
+
+          while IFS= read -r -d '' FILE; do
+            ZIP_FILE="$FILE"
             break
           done < <(
             find "$GITHUB_WORKSPACE" \
@@ -35,41 +61,86 @@ jobs:
               -print0
           )
 
-          if [ -z "$ZIP" ]; then
+          if [ -z "$ZIP_FILE" ]; then
+            echo ""
             echo "ERROR: No ZIP file found in repository root."
-            echo "Upload the SADEE X DIMA project ZIP to the repository root."
+            echo ""
+            echo "Files in repository:"
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 2 \
+              -type f \
+              ! -path "*/.git/*" \
+              -print
             exit 1
           fi
 
-          echo "ZIP: $ZIP"
-          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "ZIP FOUND:"
+          echo "$ZIP_FILE"
+
+          echo "zip=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+
+      # ==========================================
+      # VALIDATE ZIP
+      # ==========================================
 
       - name: Validate ZIP
         shell: bash
         run: |
           set -euo pipefail
-          unzip -t "${{ steps.zip.outputs.zip }}"
+
+          ZIP="${{ steps.zip.outputs.zip }}"
+
+          echo "=========================================="
+          echo " VALIDATING ZIP"
+          echo "=========================================="
+
+          unzip -t "$ZIP"
+
+          echo ""
+          echo "ZIP IS VALID."
+
+
+      # ==========================================
+      # EXTRACT ZIP
+      # ==========================================
 
       - name: Extract project
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf "$GITHUB_WORKSPACE/extracted"
-          mkdir -p "$GITHUB_WORKSPACE/extracted"
+          ZIP="${{ steps.zip.outputs.zip }}"
+          EXTRACTED="$GITHUB_WORKSPACE/extracted"
 
-          unzip -q -o \
-            "${{ steps.zip.outputs.zip }}" \
-            -d "$GITHUB_WORKSPACE/extracted"
+          echo "=========================================="
+          echo " EXTRACTING PROJECT"
+          echo "=========================================="
 
-          FILE_COUNT="$(find "$GITHUB_WORKSPACE/extracted" -type f | wc -l)"
+          rm -rf "$EXTRACTED"
+          mkdir -p "$EXTRACTED"
 
-          if [ "$FILE_COUNT" -eq 0 ]; then
+          unzip -q -o "$ZIP" -d "$EXTRACTED"
+
+          COUNT="$(find "$EXTRACTED" -type f | wc -l)"
+
+          echo ""
+          echo "Extracted files: $COUNT"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo ""
             echo "ERROR: ZIP extracted zero files."
             exit 1
           fi
 
-          echo "Extracted files: $FILE_COUNT"
+          echo ""
+          echo "EXTRACTION SUCCESS."
+
+
+      # ==========================================
+      # DETECT ANDROID PROJECT
+      # ==========================================
 
       - name: Detect Android project
         id: project
@@ -77,18 +148,27 @@ jobs:
         run: |
           set -euo pipefail
 
+          ROOT="$GITHUB_WORKSPACE/extracted"
           PROJECT=""
 
-          while IFS= read -r f; do
-            D="$(dirname "$f")"
+          echo "=========================================="
+          echo " DETECTING ANDROID PROJECT"
+          echo "=========================================="
 
-            if [ -f "$D/settings.gradle" ] || \
-               [ -f "$D/settings.gradle.kts" ]; then
-              PROJECT="$D"
+          while IFS= read -r SETTINGS; do
+
+            DIR="$(dirname "$SETTINGS")"
+
+            if [ -f "$DIR/settings.gradle" ] || \
+               [ -f "$DIR/settings.gradle.kts" ]; then
+
+              PROJECT="$DIR"
               break
+
             fi
+
           done < <(
-            find "$GITHUB_WORKSPACE/extracted" \
+            find "$ROOT" \
               -type f \
               \( \
                 -name "settings.gradle" \
@@ -99,66 +179,201 @@ jobs:
           )
 
           if [ -z "$PROJECT" ]; then
+
+            while IFS= read -r GRADLEW; do
+
+              DIR="$(dirname "$GRADLEW")"
+
+              if [ -f "$DIR/settings.gradle" ] || \
+                 [ -f "$DIR/settings.gradle.kts" ]; then
+
+                PROJECT="$DIR"
+                break
+
+              fi
+
+            done < <(
+              find "$ROOT" \
+                -type f \
+                -name "gradlew" \
+                -print
+            )
+
+          fi
+
+          if [ -z "$PROJECT" ]; then
+            echo ""
             echo "ERROR: Android Gradle project not found."
-            find "$GITHUB_WORKSPACE/extracted" \
-              -maxdepth 6 \
-              -type f \
+            echo ""
+            echo "Extracted structure:"
+            find "$ROOT" \
+              -maxdepth 7 \
               -print
             exit 1
           fi
 
           PROJECT="$(realpath "$PROJECT")"
 
-          echo "Android project:"
+          echo ""
+          echo "ANDROID PROJECT:"
           echo "$PROJECT"
 
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Android source
+
+      # ==========================================
+      # CHECK APP MODULE
+      # ==========================================
+
+      - name: Detect Android app module
+        id: module
         shell: bash
         run: |
           set -euo pipefail
 
           PROJECT="${{ steps.project.outputs.project }}"
+          MODULE=""
 
-          test -f "$PROJECT/app/build.gradle" || \
-            test -f "$PROJECT/app/build.gradle.kts"
+          echo "=========================================="
+          echo " DETECTING APP MODULE"
+          echo "=========================================="
 
-          test -f "$PROJECT/app/src/main/AndroidManifest.xml"
-          test -f "$PROJECT/app/src/main/java/com/sadee/optimizer/MainActivity.java"
+          if [ -d "$PROJECT/app" ]; then
 
-          if [ -f "$PROJECT/admin-dashboard/index.html" ]; then
-            echo "Admin dashboard found."
-            echo "Admin dashboard will NOT be modified or deployed."
+            MODULE="$PROJECT/app"
+
           else
-            echo "Admin dashboard not present in this ZIP; continuing Android build."
+
+            while IFS= read -r MANIFEST; do
+
+              DIR="$(dirname "$MANIFEST")"
+
+              if [ -f "$DIR/../../build.gradle" ] || \
+                 [ -f "$DIR/../../build.gradle.kts" ]; then
+
+                MODULE="$(realpath "$DIR/../..")"
+                break
+
+              fi
+
+            done < <(
+              find "$PROJECT" \
+                -type f \
+                -path "*/src/main/AndroidManifest.xml" \
+                -print
+            )
+
           fi
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
+          if [ -z "$MODULE" ] || [ ! -d "$MODULE" ]; then
+            echo ""
+            echo "ERROR: Android app module not found."
+            exit 1
+          fi
 
-      - name: Setup Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.7"
+          MODULE="$(realpath "$MODULE")"
+
+          echo ""
+          echo "ANDROID APP MODULE:"
+          echo "$MODULE"
+
+          echo "module=$MODULE" >> "$GITHUB_OUTPUT"
+
+
+      # ==========================================
+      # ANDROID SDK
+      # IMPORTANT:
+      # DO NOT INSTALL "tools"
+      # ==========================================
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
 
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          echo "=========================================="
+          echo " SETTING UP ANDROID SDK"
+          echo "=========================================="
 
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+          SDKMANAGER=""
+
+          if [ -x "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+
+            SDKMANAGER="$(
+              find "$ANDROID_HOME/cmdline-tools" \
+                -type f \
+                -name "sdkmanager" \
+                -print \
+                | head -n 1
+            )"
+
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo ""
+            echo "ERROR: sdkmanager not found."
+            exit 1
+          fi
+
+          echo ""
+          echo "SDKMANAGER:"
+          echo "$SDKMANAGER"
+
+          echo ""
+          echo "ACCEPTING LICENSES..."
+
+          yes | "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --licenses >/dev/null 2>&1 || true
+
+          echo ""
+          echo "INSTALLING PLATFORM TOOLS..."
+
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            "platform-tools"
+
+          echo ""
+          echo "INSTALLING ANDROID 35..."
+
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            "platforms;android-35"
+
+          echo ""
+          echo "INSTALLING BUILD TOOLS 35..."
+
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
             "build-tools;35.0.0"
+
+          echo ""
+          echo "ANDROID SDK READY."
+
+
+      # ==========================================
+      # GRADLE
+      # ==========================================
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+
+      # ==========================================
+      # GRADLE CONFIG
+      # ==========================================
 
       - name: Configure Gradle
         shell: bash
@@ -167,19 +382,29 @@ jobs:
 
           PROJECT="${{ steps.project.outputs.project }}"
 
-          touch "$PROJECT/gradle.properties"
+          cd "$PROJECT"
 
-          if ! grep -q "^org.gradle.jvmargs=" "$PROJECT/gradle.properties"; then
+          touch gradle.properties
+
+          if ! grep -q "^org.gradle.jvmargs=" gradle.properties; then
             echo "org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8" \
-              >> "$PROJECT/gradle.properties"
+              >> gradle.properties
           fi
 
-          if ! grep -q "^org.gradle.daemon=" "$PROJECT/gradle.properties"; then
+          if ! grep -q "^org.gradle.daemon=" gradle.properties; then
             echo "org.gradle.daemon=false" \
-              >> "$PROJECT/gradle.properties"
+              >> gradle.properties
           fi
 
-      - name: Build release APK
+          echo ""
+          echo "GRADLE CONFIGURED."
+
+
+      # ==========================================
+      # GRADLE WRAPPER
+      # ==========================================
+
+      - name: Prepare Gradle wrapper
         shell: bash
         run: |
           set -euo pipefail
@@ -188,10 +413,84 @@ jobs:
 
           cd "$PROJECT"
 
-          gradle clean assembleRelease \
+          if [ -f "./gradlew" ]; then
+
+            echo "Existing Gradle wrapper found."
+
+            chmod +x ./gradlew
+
+          else
+
+            echo "Gradle wrapper not found."
+
+            if command -v gradle >/dev/null 2>&1; then
+
+              gradle wrapper \
+                --gradle-version 8.7
+
+              chmod +x ./gradlew
+
+            else
+
+              echo "ERROR: Gradle command not found."
+              exit 1
+
+            fi
+
+          fi
+
+          echo ""
+          echo "GRADLE VERSION:"
+          ./gradlew --version
+
+
+      # ==========================================
+      # CLEAN
+      # ==========================================
+
+      - name: Clean project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          cd "$PROJECT"
+
+          ./gradlew clean \
+            --no-daemon \
+            --stacktrace
+
+
+      # ==========================================
+      # BUILD RELEASE APK
+      # ==========================================
+
+      - name: Build Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          cd "$PROJECT"
+
+          echo "=========================================="
+          echo " BUILDING RELEASE APK"
+          echo "=========================================="
+
+          ./gradlew assembleRelease \
             --no-daemon \
             --stacktrace \
             --warning-mode all
+
+          echo ""
+          echo "RELEASE BUILD FINISHED."
+
+
+      # ==========================================
+      # FIND APK
+      # ==========================================
 
       - name: Locate generated APK
         id: apk
@@ -200,43 +499,81 @@ jobs:
           set -euo pipefail
 
           PROJECT="${{ steps.project.outputs.project }}"
+          MODULE="${{ steps.module.outputs.module }}"
 
-          APK="$(
-            find "$PROJECT/app/build/outputs/apk/release" \
-              -type f \
-              -name "*.apk" \
-              -print \
-              | head -n 1
-          )"
+          echo "=========================================="
+          echo " SEARCHING FOR APK"
+          echo "=========================================="
+
+          APK=""
+
+          if [ -d "$MODULE/build/outputs" ]; then
+
+            APK="$(
+              find "$MODULE/build/outputs" \
+                -type f \
+                -name "*.apk" \
+                -print \
+                | grep -Ei "/release/.*\.apk$" \
+                | head -n 1 || true
+            )"
+
+          fi
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Release APK was not generated."
 
+            APK="$(
+              find "$PROJECT" \
+                -type f \
+                -name "*.apk" \
+                -print \
+                | grep -Ei "/release/.*\.apk$" \
+                | head -n 1 || true
+            )"
+
+          fi
+
+          if [ -z "$APK" ]; then
+
+            echo ""
+            echo "ERROR: APK was not generated."
+            echo ""
+            echo "Build outputs:"
             find "$PROJECT" \
               -path "*/build/outputs/*" \
               -print
 
             exit 1
+
           fi
 
           APK="$(realpath "$APK")"
 
-          echo "Generated APK:"
+          echo ""
+          echo "APK FOUND:"
           echo "$APK"
 
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
+
+
+      # ==========================================
+      # CREATE TEMP SIGNING KEY
+      # ==========================================
 
       - name: Create temporary signing key
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p "$RUNNER_TEMP/sadee-signing"
+          SIGN_DIR="$RUNNER_TEMP/sadee-signing"
+
+          rm -rf "$SIGN_DIR"
+          mkdir -p "$SIGN_DIR"
 
           keytool \
             -genkeypair \
             -v \
-            -keystore "$RUNNER_TEMP/sadee-signing/release.keystore" \
+            -keystore "$SIGN_DIR/release.keystore" \
             -alias sadee \
             -keyalg RSA \
             -keysize 2048 \
@@ -245,25 +582,40 @@ jobs:
             -keypass sadee123 \
             -dname "CN=SADEE X DIMA, OU=SADEE, O=SADEE X DIMA, L=Colombo, ST=Western, C=LK"
 
-      - name: Find Android build tools
+
+      # ==========================================
+      # ANDROID BUILD TOOLS
+      # ==========================================
+
+      - name: Locate Android build tools
         id: tools
         shell: bash
         run: |
           set -euo pipefail
 
-          TOOLS="$ANDROID_SDK_ROOT/build-tools/35.0.0"
+          export ANDROID_HOME=/usr/local/lib/android/sdk
 
-          if [ ! -x "$TOOLS/zipalign" ]; then
-            echo "ERROR: zipalign not found."
-            exit 1
-          fi
+          TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 
           if [ ! -x "$TOOLS/apksigner" ]; then
             echo "ERROR: apksigner not found."
             exit 1
           fi
 
+          if [ ! -x "$TOOLS/zipalign" ]; then
+            echo "ERROR: zipalign not found."
+            exit 1
+          fi
+
+          echo "Android build tools:"
+          echo "$TOOLS"
+
           echo "tools=$TOOLS" >> "$GITHUB_OUTPUT"
+
+
+      # ==========================================
+      # ALIGN + SIGN
+      # ==========================================
 
       - name: Align and sign APK
         shell: bash
@@ -273,8 +625,14 @@ jobs:
           APK="${{ steps.apk.outputs.apk }}"
           TOOLS="${{ steps.tools.outputs.tools }}"
 
-          rm -rf "$GITHUB_WORKSPACE/final-apk"
-          mkdir -p "$GITHUB_WORKSPACE/final-apk"
+          SIGN_DIR="$GITHUB_WORKSPACE/final-apk"
+
+          rm -rf "$SIGN_DIR"
+          mkdir -p "$SIGN_DIR"
+
+          echo "=========================================="
+          echo " ALIGNING APK"
+          echo "=========================================="
 
           "$TOOLS/zipalign" \
             -f \
@@ -282,13 +640,27 @@ jobs:
             "$APK" \
             "$RUNNER_TEMP/aligned.apk"
 
+          echo ""
+          echo "=========================================="
+          echo " SIGNING APK"
+          echo "=========================================="
+
           "$TOOLS/apksigner" sign \
             --ks "$RUNNER_TEMP/sadee-signing/release.keystore" \
             --ks-key-alias sadee \
             --ks-pass pass:sadee123 \
             --key-pass pass:sadee123 \
-            --out "$GITHUB_WORKSPACE/final-apk/SADEE_X_DIMA_OPTIMIZER.apk" \
+            --out "$SIGN_DIR/SADEE_X_DIMA_OPTIMIZER.apk" \
             "$RUNNER_TEMP/aligned.apk"
+
+          echo ""
+          echo "SIGNED APK:"
+          ls -lh "$SIGN_DIR/SADEE_X_DIMA_OPTIMIZER.apk"
+
+
+      # ==========================================
+      # VERIFY APK
+      # ==========================================
 
       - name: Verify signed APK
         shell: bash
@@ -298,15 +670,28 @@ jobs:
           TOOLS="${{ steps.tools.outputs.tools }}"
           APK="$GITHUB_WORKSPACE/final-apk/SADEE_X_DIMA_OPTIMIZER.apk"
 
-          test -f "$APK"
+          echo "=========================================="
+          echo " VERIFYING APK"
+          echo "=========================================="
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: Signed APK not found."
+            exit 1
+          fi
 
           "$TOOLS/apksigner" verify \
             --verbose \
             "$APK"
 
-          ls -lh "$APK"
+          echo ""
+          echo "APK VERIFICATION SUCCESS."
 
-      - name: Upload signed APK
+
+      # ==========================================
+      # UPLOAD ONLY APK
+      # ==========================================
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: SADEE-X-DIMA-OPTIMIZER-APK
@@ -314,16 +699,32 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Build summary
+
+      # ==========================================
+      # SUCCESS
+      # ==========================================
+
+      - name: Build success
         if: success()
         shell: bash
         run: |
+          echo ""
           echo "=============================================="
           echo " SADEE X DIMA OPTIMIZER BUILD SUCCESS"
           echo "=============================================="
-          echo "Release APK: BUILT"
+          echo ""
+          echo "ZIP: EXTRACTED"
+          echo "ANDROID PROJECT: DETECTED"
+          echo "ANDROID SDK: READY"
+          echo "RELEASE APK: BUILT"
+          echo "APK: ALIGNED"
           echo "APK: SIGNED"
           echo "APK: VERIFIED"
-          echo "Admin panel: NOT MODIFIED"
-          echo "Admin panel: NOT DEPLOYED"
+          echo ""
+          echo "ADMIN PANEL: NOT MODIFIED"
+          echo "ADMIN PANEL: NOT DEPLOYED"
+          echo ""
+          echo "APK:"
+          ls -lh "$GITHUB_WORKSPACE/final-apk/SADEE_X_DIMA_OPTIMIZER.apk"
+          echo ""
           echo "=============================================="
