@@ -1,89 +1,238 @@
-name: Extract Uploaded ZIP
+name: SADEE X DIMA - Build APK
 
 on:
   push:
     branches:
       - main
+      - master
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  extract:
+  build:
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find ZIP file
-        id: find_zip
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Find project ZIP
+        id: zip
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          ZIP_FILE=$(find "$GITHUB_WORKSPACE" \
-            -type f \
-            -iname "*.zip" \
-            ! -path "$GITHUB_WORKSPACE/.git/*" \
-            | head -n 1)
+          ZIP_FILE=""
+
+          for file in "$GITHUB_WORKSPACE"/*.zip; do
+            if [ -f "$file" ]; then
+              ZIP_FILE="$file"
+              break
+            fi
+          done
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found."
-            echo "Files in repository:"
-            find "$GITHUB_WORKSPACE" \
-              -maxdepth 3 \
-              -type f \
-              ! -path "$GITHUB_WORKSPACE/.git/*"
+            echo "ERROR: No ZIP file found in repository root."
+            echo "Repository root files:"
+            find "$GITHUB_WORKSPACE" -maxdepth 2 -type f \
+              ! -path "$GITHUB_WORKSPACE/.git/*" -print | sort
             exit 1
           fi
 
-          echo "ZIP FOUND:"
-          echo "$ZIP_FILE"
-
+          echo "Using ZIP: $ZIP_FILE"
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Extract ZIP
+      - name: Validate ZIP
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          unzip -t "${{ steps.zip.outputs.zip_file }}"
 
-          rm -rf extracted
-          mkdir -p extracted
-
-          unzip -o \
-            "${{ steps.find_zip.outputs.zip_file }}" \
-            -d extracted
-
-          echo "ZIP extraction completed."
-
-      - name: Show extracted files
+      - name: Extract project
+        id: extract
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "======================================"
-          echo " EXTRACTED PROJECT"
-          echo "======================================"
+          ROOT="$GITHUB_WORKSPACE/extracted"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
 
-          find extracted \
-            -maxdepth 6 \
-            -type f \
-            | sort
+          unzip -oq "${{ steps.zip.outputs.zip_file }}" -d "$ROOT"
 
-      - name: Upload extracted project
+          COUNT=$(find "$ROOT" -type f | wc -l)
+          echo "Extracted files: $COUNT"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: ZIP extracted zero files."
+            exit 1
+          fi
+
+          PROJECT=$(find "$ROOT" -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            PROJECT=$(find "$ROOT" -type f -name gradlew -print -quit)
+          fi
+
+          if [ -z "$PROJECT" ]; then
+            PROJECT=$(find "$ROOT" -type f \
+              \( -name build.gradle -o -name build.gradle.kts \) \
+              -print -quit)
+          fi
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: Android Gradle project not found inside ZIP."
+            find "$ROOT" -maxdepth 6 -print | sort
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT")
+          echo "Project directory: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+
+          if [ -z "$ANDROID_HOME" ] || [ ! -d "$ANDROID_HOME" ]; then
+            echo "ERROR: Android SDK was not found on the GitHub runner."
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager -perm -111 2>/dev/null \
+            | sort -V | tail -n 1 || true)
+
+          if [ -n "$SDKMANAGER" ]; then
+            "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+              "platform-tools" \
+              "platforms;android-35" \
+              "build-tools;35.0.0"
+          fi
+
+          test -d "$ANDROID_HOME/platforms/android-35"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/zipalign"
+
+      - name: Check project without changing Admin Panel
+        working-directory: ${{ steps.extract.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f settings.gradle || test -f settings.gradle.kts
+          test -f app/build.gradle || test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/java/com/sadee/optimizer/MainActivity.java
+
+          echo "Checking existing app source..."
+          grep -q 'addStableGame' app/src/main/java/com/sadee/optimizer/MainActivity.java
+
+          echo "Admin Panel is not modified by this workflow."
+          echo "No admin-dashboard files are copied, edited, deleted, or deployed."
+
+      - name: Build release APK
+        working-directory: ${{ steps.extract.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle clean assembleRelease --no-daemon --stacktrace --warning-mode all
+
+      - name: Locate release APK
+        id: apk
+        working-directory: ${{ steps.extract.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK=$(find app/build/outputs -type f -name '*.apk' \
+            -path '*/release/*' -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Release APK was not generated."
+            find app/build/outputs -type f -print 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "APK: $APK"
+          echo "apk=$GITHUB_WORKSPACE/extracted/${APK#./}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign release APK
+        id: sign
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="${{ steps.apk.outputs.apk }}"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+
+          rm -rf "$GITHUB_WORKSPACE/signed"
+          mkdir -p "$GITHUB_WORKSPACE/signed"
+
+          "$BUILD_TOOLS/zipalign" -f 4 \
+            "$APK" \
+            "$GITHUB_WORKSPACE/signed/aligned.apk"
+
+          keytool -genkeypair -v \
+            -keystore "$GITHUB_WORKSPACE/signed/release.keystore" \
+            -storepass changeit \
+            -keypass changeit \
+            -alias sadee \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname 'CN=SADEE X DIMA, OU=Optimizer, O=SADEE, L=Colombo, ST=Western, C=LK'
+
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$GITHUB_WORKSPACE/signed/release.keystore" \
+            --ks-key-alias sadee \
+            --ks-pass pass:changeit \
+            --key-pass pass:changeit \
+            --out "$GITHUB_WORKSPACE/signed/SADEE_X_DIMA_OPTIMIZER.apk" \
+            "$GITHUB_WORKSPACE/signed/aligned.apk"
+
+          "$BUILD_TOOLS/apksigner" verify --verbose \
+            "$GITHUB_WORKSPACE/signed/SADEE_X_DIMA_OPTIMIZER.apk"
+
+          rm -f "$GITHUB_WORKSPACE/signed/aligned.apk" \
+                "$GITHUB_WORKSPACE/signed/release.keystore"
+
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: extracted-project
-          path: extracted/
+          name: SADEE-X-DIMA-OPTIMIZER-APK
+          path: ${{ github.workspace }}/signed/SADEE_X_DIMA_OPTIMIZER.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
-      - name: Extraction success
+      - name: Build success
+        if: success()
         shell: bash
         run: |
-          echo "======================================"
-          echo " ZIP EXTRACT SUCCESS"
-          echo "======================================"
-          echo "The ZIP was found and extracted successfully."
+          echo "=============================================="
+          echo " SADEE X DIMA OPTIMIZER - BUILD SUCCESS"
+          echo "=============================================="
+          ls -lh "$GITHUB_WORKSPACE/signed/SADEE_X_DIMA_OPTIMIZER.apk"
+          echo "Admin Panel: untouched"
