@@ -1,22 +1,13 @@
-name: Admin Panel - GitHub Pages
+name: SADEE X DIMA - Android APK Build
 
 on:
   push:
     branches:
       - main
-    paths:
-      - "admin-dashboard/**"
-      - ".github/workflows/admin-pages.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -26,62 +17,313 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare Admin Panel
+      - name: Find project ZIP
+        id: zip
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "======================================"
-          echo " PREPARING ADMIN PANEL"
-          echo "======================================"
+          ZIP=""
+          while IFS= read -r -d '' f; do
+            ZIP="$f"
+            break
+          done < <(
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 1 \
+              -type f \
+              -iname "*.zip" \
+              -print0
+          )
 
-          if [ ! -f "admin-dashboard/index.html" ]; then
-            echo "ERROR: admin-dashboard/index.html not found."
-            echo ""
-            echo "Repository structure:"
-            find . -maxdepth 3 -type f -print
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No ZIP file found in repository root."
+            echo "Upload the SADEE X DIMA project ZIP to the repository root."
             exit 1
           fi
 
-          rm -rf _site
-          mkdir -p _site
+          echo "ZIP: $ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
-          # Copy ADMIN PANEL ONLY.
-          # Original admin-dashboard files are NOT modified.
-          cp -a admin-dashboard/. _site/
+      - name: Validate ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -t "${{ steps.zip.outputs.zip }}"
 
-          # GitHub Pages should serve index.html from the site root.
-          test -f "_site/index.html"
+      - name: Extract project
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          # Prevent Jekyll from changing the static site.
-          touch _site/.nojekyll
+          rm -rf "$GITHUB_WORKSPACE/extracted"
+          mkdir -p "$GITHUB_WORKSPACE/extracted"
 
-          echo ""
-          echo "Published files:"
-          find _site -maxdepth 3 -type f -print
+          unzip -q -o \
+            "${{ steps.zip.outputs.zip }}" \
+            -d "$GITHUB_WORKSPACE/extracted"
 
-          echo ""
-          echo "ROOT INDEX:"
-          ls -lh _site/index.html
+          FILE_COUNT="$(find "$GITHUB_WORKSPACE/extracted" -type f | wc -l)"
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+          if [ "$FILE_COUNT" -eq 0 ]; then
+            echo "ERROR: ZIP extracted zero files."
+            exit 1
+          fi
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+          echo "Extracted files: $FILE_COUNT"
+
+      - name: Detect Android project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT=""
+
+          while IFS= read -r f; do
+            D="$(dirname "$f")"
+
+            if [ -f "$D/settings.gradle" ] || \
+               [ -f "$D/settings.gradle.kts" ]; then
+              PROJECT="$D"
+              break
+            fi
+          done < <(
+            find "$GITHUB_WORKSPACE/extracted" \
+              -type f \
+              \( \
+                -name "settings.gradle" \
+                -o \
+                -name "settings.gradle.kts" \
+              \) \
+              -print
+          )
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: Android Gradle project not found."
+            find "$GITHUB_WORKSPACE/extracted" \
+              -maxdepth 6 \
+              -type f \
+              -print
+            exit 1
+          fi
+
+          PROJECT="$(realpath "$PROJECT")"
+
+          echo "Android project:"
+          echo "$PROJECT"
+
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          test -f "$PROJECT/app/build.gradle" || \
+            test -f "$PROJECT/app/build.gradle.kts"
+
+          test -f "$PROJECT/app/src/main/AndroidManifest.xml"
+          test -f "$PROJECT/app/src/main/java/com/sadee/optimizer/MainActivity.java"
+
+          if [ -f "$PROJECT/admin-dashboard/index.html" ]; then
+            echo "Admin dashboard found."
+            echo "Admin dashboard will NOT be modified or deployed."
+          else
+            echo "Admin dashboard not present in this ZIP; continuing Android build."
+          fi
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
         with:
-          path: "_site"
+          distribution: temurin
+          java-version: "17"
 
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
 
-    runs-on: ubuntu-24.04
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-    needs: build
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
 
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Configure Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          touch "$PROJECT/gradle.properties"
+
+          if ! grep -q "^org.gradle.jvmargs=" "$PROJECT/gradle.properties"; then
+            echo "org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8" \
+              >> "$PROJECT/gradle.properties"
+          fi
+
+          if ! grep -q "^org.gradle.daemon=" "$PROJECT/gradle.properties"; then
+            echo "org.gradle.daemon=false" \
+              >> "$PROJECT/gradle.properties"
+          fi
+
+      - name: Build release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          cd "$PROJECT"
+
+          gradle clean assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+      - name: Locate generated APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          APK="$(
+            find "$PROJECT/app/build/outputs/apk/release" \
+              -type f \
+              -name "*.apk" \
+              -print \
+              | head -n 1
+          )"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Release APK was not generated."
+
+            find "$PROJECT" \
+              -path "*/build/outputs/*" \
+              -print
+
+            exit 1
+          fi
+
+          APK="$(realpath "$APK")"
+
+          echo "Generated APK:"
+          echo "$APK"
+
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Create temporary signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/sadee-signing"
+
+          keytool \
+            -genkeypair \
+            -v \
+            -keystore "$RUNNER_TEMP/sadee-signing/release.keystore" \
+            -alias sadee \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass sadee123 \
+            -keypass sadee123 \
+            -dname "CN=SADEE X DIMA, OU=SADEE, O=SADEE X DIMA, L=Colombo, ST=Western, C=LK"
+
+      - name: Find Android build tools
+        id: tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TOOLS="$ANDROID_SDK_ROOT/build-tools/35.0.0"
+
+          if [ ! -x "$TOOLS/zipalign" ]; then
+            echo "ERROR: zipalign not found."
+            exit 1
+          fi
+
+          if [ ! -x "$TOOLS/apksigner" ]; then
+            echo "ERROR: apksigner not found."
+            exit 1
+          fi
+
+          echo "tools=$TOOLS" >> "$GITHUB_OUTPUT"
+
+      - name: Align and sign APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="${{ steps.apk.outputs.apk }}"
+          TOOLS="${{ steps.tools.outputs.tools }}"
+
+          rm -rf "$GITHUB_WORKSPACE/final-apk"
+          mkdir -p "$GITHUB_WORKSPACE/final-apk"
+
+          "$TOOLS/zipalign" \
+            -f \
+            4 \
+            "$APK" \
+            "$RUNNER_TEMP/aligned.apk"
+
+          "$TOOLS/apksigner" sign \
+            --ks "$RUNNER_TEMP/sadee-signing/release.keystore" \
+            --ks-key-alias sadee \
+            --ks-pass pass:sadee123 \
+            --key-pass pass:sadee123 \
+            --out "$GITHUB_WORKSPACE/final-apk/SADEE_X_DIMA_OPTIMIZER.apk" \
+            "$RUNNER_TEMP/aligned.apk"
+
+      - name: Verify signed APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TOOLS="${{ steps.tools.outputs.tools }}"
+          APK="$GITHUB_WORKSPACE/final-apk/SADEE_X_DIMA_OPTIMIZER.apk"
+
+          test -f "$APK"
+
+          "$TOOLS/apksigner" verify \
+            --verbose \
+            "$APK"
+
+          ls -lh "$APK"
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SADEE-X-DIMA-OPTIMIZER-APK
+          path: ${{ github.workspace }}/final-apk/SADEE_X_DIMA_OPTIMIZER.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build summary
+        if: success()
+        shell: bash
+        run: |
+          echo "=============================================="
+          echo " SADEE X DIMA OPTIMIZER BUILD SUCCESS"
+          echo "=============================================="
+          echo "Release APK: BUILT"
+          echo "APK: SIGNED"
+          echo "APK: VERIFIED"
+          echo "Admin panel: NOT MODIFIED"
+          echo "Admin panel: NOT DEPLOYED"
+          echo "=============================================="
