@@ -1,4 +1,4 @@
-name: SADEE X DIMA ADVANCED V2 - FINAL BUILD
+name: SADEE X DIMA V3 - AUTO LOGIN + DASHBOARD + SIGNED APK
 
 on:
   workflow_dispatch:
@@ -11,29 +11,31 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find project ZIP
+      - name: Locate project ZIP
         shell: bash
         run: |
           set -euo pipefail
-          echo "ZIP files in repository:"
-          find . -maxdepth 3 -type f -iname "*.zip" -print || true
+          echo "ZIP files found:"
+          find . -type f -iname '*.zip' ! -path './.git/*' -print | sort
 
-          ZIP="$(find . -maxdepth 3 -type f -iname "*.zip" \
-            ! -path "./.git/*" \
-            | sort | grep -Ei 'FULL_FIXED|FIXED|ADVANCED|GREEN' | head -n 1 || true)"
+          ZIP="$(find . -type f -iname 'SADEE_X_DIMA_AUTO_LOGIN_DASHBOARD_V3.zip' ! -path './.git/*' | head -n 1 || true)"
 
           if [ -z "$ZIP" ]; then
-            ZIP="$(find . -maxdepth 3 -type f -iname "*.zip" ! -path "./.git/*" | sort | head -n 1 || true)"
+            ZIP="$(find . -type f -iname '*.zip' ! -path './.git/*' | grep -Ei 'AUTO_LOGIN|DASHBOARD|FULL_FIXED|ADVANCED.*V2|GREEN' | sort | tail -n 1 || true)"
           fi
 
           if [ -z "$ZIP" ]; then
-            echo "::error::No project ZIP found. Upload the project ZIP to the repository root."
+            ZIP="$(find . -type f -iname '*.zip' ! -path './.git/*' | sort | tail -n 1 || true)"
+          fi
+
+          if [ -z "$ZIP" ]; then
+            echo "::error::No project ZIP found. Upload the V3 ZIP to the repository root."
             exit 1
           fi
 
@@ -48,27 +50,28 @@ jobs:
           mkdir -p extracted
           unzip -q "$ZIP_PATH" -d extracted
 
-          PROJECT="$(find extracted -type f -name settings.gradle -o -name settings.gradle.kts | head -n 1 | xargs -r dirname)"
-
+          PROJECT="$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit | xargs -r dirname)"
           if [ -z "$PROJECT" ]; then
-            echo "::error::Android Gradle project not found inside ZIP."
-            find extracted -maxdepth 4 -type f | head -n 100
+            echo "::error::No Android Gradle project found inside ZIP."
+            find extracted -maxdepth 5 -type f | head -n 150
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
-          echo "Android project: $PROJECT"
+          echo "Project: $PROJECT"
 
-      - name: Verify required source files
+      - name: Verify V3 source
         shell: bash
         run: |
           set -euo pipefail
-          test -f "$PROJECT_DIR/settings.gradle" || test -f "$PROJECT_DIR/settings.gradle.kts"
           test -f "$PROJECT_DIR/app/build.gradle" || test -f "$PROJECT_DIR/app/build.gradle.kts"
           test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
           test -f "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/MainActivity.java"
           test -f "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/Supabase.java"
-          echo "Project verification OK."
+          test -f "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/DeviceInfo.java"
+          grep -q 'tryAutoLogin' "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/MainActivity.java"
+          grep -q 'sadee_secure_session' "$PROJECT_DIR/app/src/main/java/com/sadee/optimizer/MainActivity.java"
+          echo "V3 auto-login source check: OK"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -82,7 +85,7 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Configure Android build
+      - name: Configure Gradle
         shell: bash
         run: |
           set -euo pipefail
@@ -93,96 +96,97 @@ jobs:
           org.gradle.daemon=false
           EOF
 
-      - name: Build unsigned release APK
+      - name: Build release APK
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-          gradle --version
-          gradle clean assembleRelease --no-daemon --stacktrace
-          APK="$(find app/build/outputs/apk/release -type f -name "*.apk" | head -n 1)"
+          gradle clean assembleRelease --no-daemon --stacktrace --info
+
+          APK="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
           if [ -z "$APK" ]; then
-            echo "::error::Release APK was not produced."
+            echo "::error::No release APK produced."
             exit 1
           fi
-          echo "APK=$APK" >> "$GITHUB_ENV"
+          echo "APK_PATH=$PROJECT_DIR/$APK" >> "$GITHUB_ENV"
           echo "Built: $APK"
 
-      - name: Prepare Android SDK signing tools
+      - name: Prepare signing tools
         shell: bash
         run: |
           set -euo pipefail
-          BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
-          echo "BUILD_TOOLS=$ANDROID_HOME/build-tools/$BUILD_TOOLS" >> "$GITHUB_ENV"
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign" -v 4 "$PROJECT_DIR/$APK" signed-aligned.apk
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "BUILD_TOOLS=$BT" >> "$GITHUB_ENV"
+          "$BT/zipalign" -f -v 4 "$APK_PATH" aligned.apk
 
-      - name: Generate release signing key
+      - name: Create signing key
         shell: bash
         run: |
           set -euo pipefail
           keytool -genkeypair -v \
-            -keystore release.keystore \
+            -keystore sadee-release.keystore \
             -alias sadee-release \
             -keyalg RSA \
             -keysize 2048 \
             -validity 10000 \
             -storepass android \
             -keypass android \
-            -dname "CN=SADEE X DIMA, OU=Mobile, O=SADEE X DIMA, L=Colombo, ST=Western, C=LK"
+            -dname 'CN=SADEE X DIMA, OU=Mobile, O=SADEE X DIMA, L=Colombo, ST=Western, C=LK'
 
-      - name: Sign APK
+      - name: Sign and verify APK
         shell: bash
         run: |
           set -euo pipefail
           "$BUILD_TOOLS/apksigner" sign \
-            --ks release.keystore \
+            --ks sadee-release.keystore \
             --ks-key-alias sadee-release \
             --ks-pass pass:android \
             --key-pass pass:android \
-            --out SADEE-X-DIMA-OPTIMIZER-release.apk \
-            signed-aligned.apk
+            --out SADEE-X-DIMA-AUTO-LOGIN-release.apk \
+            aligned.apk
 
-          "$BUILD_TOOLS/apksigner" verify --verbose SADEE-X-DIMA-OPTIMIZER-release.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose SADEE-X-DIMA-AUTO-LOGIN-release.apk
+          ls -lh SADEE-X-DIMA-AUTO-LOGIN-release.apk
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-ADVANCED-V2-SIGNED-APK
-          path: SADEE-X-DIMA-OPTIMIZER-release.apk
+          name: SADEE-X-DIMA-AUTO-LOGIN-SIGNED-APK
+          path: SADEE-X-DIMA-AUTO-LOGIN-release.apk
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload build log
+      - name: Upload build reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SADEE-X-DIMA-ADVANCED-V2-BUILD-LOG
+          name: SADEE-X-DIMA-V3-BUILD-REPORTS
           path: |
             ${{ env.PROJECT_DIR }}/app/build/reports/**
             ${{ env.PROJECT_DIR }}/app/build/outputs/logs/**
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Deploy admin dashboard to GitHub Pages
+      - name: Prepare admin dashboard
         if: success()
         shell: bash
         run: |
           set -euo pipefail
-          ADMIN="$(find "$PROJECT_DIR" -type f -path "*/admin-dashboard/index.html" | head -n 1 | xargs -r dirname)"
-
-          if [ -z "$ADMIN" ]; then
-            echo "No admin-dashboard found; skipping Pages deployment."
+          ADMIN_DIR="$(find "$PROJECT_DIR" -type f -path '*/admin-dashboard/index.html' -print -quit | xargs -r dirname)"
+          if [ -z "$ADMIN_DIR" ]; then
+            echo "No admin dashboard found; skipping Pages deployment."
             exit 0
           fi
-
           rm -rf public
           mkdir -p public
-          cp -R "$ADMIN"/. public/
-
+          cp -R "$ADMIN_DIR"/. public/
           touch public/.nojekyll
+          echo "Admin dashboard prepared from $ADMIN_DIR"
 
-      - name: Publish admin dashboard
-        if: success()
+      - name: Deploy admin dashboard
+        if: success() && hashFiles('public/index.html') != ''
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
